@@ -19,6 +19,7 @@ class AgentState(TypedDict):
 
     # Resultados del diagnóstico
     skill_scores: Dict[str, float] # {"skill_1": 75.0, "skill_2": 60.0, ...}
+    skills_by_category: Dict[str, List[str]] 
     strong_skills: List[str]
     weak_skills: List[str]
 
