@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import json
 from typing import Dict, List
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from schemas.state import AgentState
@@ -13,8 +13,8 @@ load_dotenv()
 
 # ─── LLM ──────────────────────────────────────────────────────────────────────
 
-llm = ChatGoogleGenerativeAI(
-    model="models/gemini-2.0-flash-lite",
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
     temperature=0.3,
 )
 

@@ -84,8 +84,14 @@ print("=" * 60)
 # Simulate 20 answers — replace with real input logic later
 student_answers = ["A"] * 20
 
+app.update_state(
+    config,
+    {
+        "diagnostic_answers": student_answers,
+    },
+)
 state = app.invoke(
-    {**state, "diagnostic_answers": student_answers},
+    None,
     config=config,
 )
 
