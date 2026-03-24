@@ -4,6 +4,7 @@ import uuid
 import random
 from dotenv import load_dotenv
 from graph.learning_graph import app
+from langfuse.langchain import CallbackHandler
 
 load_dotenv()
 
@@ -55,7 +56,12 @@ initial_state = {
 
 # ─── Thread config (required for interrupt to work) ───────────────────────────
 
-config = {"configurable": {"thread_id": "test-session-1"}}
+langfuse_handler = CallbackHandler()
+
+config = {
+        "configurable": {"thread_id": "test-session-1"},
+        "callbacks": [langfuse_handler],
+    }
 
 # ─── Phase 1: run until interrupt (generate_exam delivers questions) ──────────
 

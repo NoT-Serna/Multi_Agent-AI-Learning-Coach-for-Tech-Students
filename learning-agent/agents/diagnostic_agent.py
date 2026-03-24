@@ -6,16 +6,18 @@ from typing import Dict, List
 
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langfuse.langchain import CallbackHandler
 
 from schemas.state import AgentState
 
 load_dotenv()
 
 # ─── LLM ──────────────────────────────────────────────────────────────────────
-
+langfuse_handler = CallbackHandler()
 llm = ChatGroq(
     model="llama-3.3-70b-versatile",
     temperature=0.3,
+    callbacks=[langfuse_handler]
 )
 
 # ─── Constants ────────────────────────────────────────────────────────────────
