@@ -1,6 +1,7 @@
 
 # run_agent.py
 import uuid
+import random
 from dotenv import load_dotenv
 from graph.learning_graph import app
 
@@ -82,7 +83,7 @@ print("FASE 2 — Evaluando respuestas...")
 print("=" * 60)
 
 # Simulate 20 answers — replace with real input logic later
-student_answers = ["A"] * 20
+student_answers = [random.choice(["A", "B", "C", "D"]) for _ in state["diagnostic_questions"]]
 
 app.update_state(
     config,
