@@ -2,4 +2,5 @@
 .env
 venv/
 __pycache__/
+langfuse/
 *.pyc
