@@ -32,7 +32,7 @@ class AgentState(TypedDict):
     current_quiz_week: Optional[int]
     current_week: Optional[int]        # 1–4
     completed_weeks: List[int]
-    current_module: Optional[str]
+    current_module: Optional[int]
     completed_modules: List[str]
 
     # Quiz
