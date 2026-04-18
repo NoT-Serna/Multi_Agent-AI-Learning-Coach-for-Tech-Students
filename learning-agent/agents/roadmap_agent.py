@@ -1,25 +1,13 @@
-import os
 import json
 from typing import Dict, List
-from dotenv import load_dotenv
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langfuse.langchain import CallbackHandler
 
+from agents.llm_factory import build_llm
 from schemas.state import AgentState
 
-load_dotenv()
-
 # ─── LLM ──────────────────────────────────────────────────────────────────────
-
-langfuse_handler = CallbackHandler()
-
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    temperature=0.3,
-    callbacks=[langfuse_handler],
-)
+llm, llm_json = build_llm()
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -54,7 +42,7 @@ def generate_roadmap(state: AgentState) -> AgentState:
     strong_skills       = state.get("strong_skills",       [])
     weak_skills         = state.get("weak_skills",         [])
 
-    response = llm.invoke([
+    response = llm_json.invoke([
         SystemMessage(content="""Eres un mentor experto en educación tecnológica.
 Tu tarea es crear un plan de estudio personalizado de 4 semanas basado en el diagnóstico del estudiante.
 
@@ -173,7 +161,7 @@ def adjust_roadmap(state: AgentState) -> AgentState:
     ]
     weeks_remaining = 4 - current_week + 1
 
-    response = llm.invoke([
+    response = llm_json.invoke([
         SystemMessage(content=f"""Eres un mentor experto en educación tecnológica.
 Un estudiante no ha podido avanzar en su plan de estudio y necesitas ajustar
 las semanas restantes para reforzar sus áreas débiles.

@@ -1,24 +1,13 @@
 import json
 from typing import Dict, List
-from dotenv import load_dotenv
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langfuse.langchain import CallbackHandler
 
+from agents.llm_factory import build_llm
 from schemas.state import AgentState
 
-load_dotenv()
-
 # ─── LLM ──────────────────────────────────────────────────────────────────────
-
-langfuse_handler = CallbackHandler()
-
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    temperature=0.3,
-    callbacks=[langfuse_handler],
-)
+llm, llm_json = build_llm()
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -68,7 +57,7 @@ def generate_quiz(state: AgentState) -> AgentState:
     modules   = week_data.get("modules", [])
     week_focus = week_data.get("focus", "")
 
-    response = llm.invoke([
+    response = llm_json.invoke([
         SystemMessage(content=f"""Eres un mentor experto en educación tecnológica.
 Crea un quiz de {QUESTIONS_PER_QUIZ} preguntas de opción múltiple para evaluar
 al estudiante al final de la semana {current_week} de su plan de estudio.
@@ -178,7 +167,7 @@ def evaluate_quiz_answers(state: AgentState) -> AgentState:
         for i, q in enumerate(quiz_questions)
     ]
 
-    response = llm.invoke([
+    response = llm_json.invoke([
         SystemMessage(content=f"""Eres un evaluador educativo.
 Evalúa las respuestas del estudiante al quiz de la semana {current_quiz_week}.
 

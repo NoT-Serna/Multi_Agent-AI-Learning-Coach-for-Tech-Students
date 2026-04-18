@@ -1,4 +1,5 @@
 # run_agent.py
+import os
 import uuid
 import random
 from dotenv import load_dotenv
@@ -44,14 +45,16 @@ initial_state = {
 
 # ─── Config ────────────────────────────────────────────────────────────────────
 
-langfuse_handler = CallbackHandler()
+callbacks = []
+langfuse = None
+if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
+    callbacks.append(CallbackHandler())
+    langfuse = get_client()
 
 config = {
     "configurable": {"thread_id": "test-session-1"},
-    "callbacks":    [langfuse_handler],
+    "callbacks": callbacks,
 }
-
-langfuse = get_client()
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -150,4 +153,5 @@ elif state["next_step"] == "completed":
 
 # ─── Flush Langfuse ────────────────────────────────────────────────────────────
 
-langfuse.flush()
+if langfuse:
+    langfuse.flush()
