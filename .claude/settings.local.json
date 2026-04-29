@@ -9,7 +9,8 @@
       "Bash(curl -s http://localhost:5176)",
       "Bash(curl -s http://localhost:5176/src/main.tsx)",
       "Read(//Users/sergiocasas/Desktop/Workspace/**)",
-      "Bash(zip -r Coachapp.zip Coachapp -x \"*/node_modules/*\" \"*/.git/*\")"
+      "Bash(zip -r Coachapp.zip Coachapp -x \"*/node_modules/*\" \"*/.git/*\")",
+      "Bash(zip -r Coachapp.zip Coachapp -x \"Coachapp/node_modules/*\")"
     ]
   }
 }

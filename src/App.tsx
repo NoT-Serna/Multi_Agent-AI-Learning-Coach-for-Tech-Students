@@ -11,6 +11,8 @@ import ObjetivosPage from './pages/ObjetivosPage';
 import RecursosPage from './pages/RecursosPage';
 import CoachIAPage from './pages/CoachIAPage';
 import AjustesPage from './pages/AjustesPage';
+import SignUpPage from './pages/SignUpPage';
+import type { SignUpResult, Usuario } from './types/auth';
 
 const titles: Record<TabId, string> = {
   dashboard: 'Dashboard',
@@ -58,6 +60,15 @@ function DashboardView() {
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('dashboard');
+  const [sesion, setSesion] = useState<SignUpResult | null>(null);
+
+  if (!sesion) {
+    return <SignUpPage onSignUp={setSesion} />;
+  }
+
+  const actualizarUsuario = (u: Usuario) => {
+    setSesion({ ...sesion, usuario: u });
+  };
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -72,7 +83,9 @@ export default function App() {
           {tab === 'objetivos' && <ObjetivosPage />}
           {tab === 'recursos' && <RecursosPage />}
           {tab === 'coach' && <CoachIAPage />}
-          {tab === 'ajustes' && <AjustesPage />}
+          {tab === 'ajustes' && (
+            <AjustesPage usuario={sesion.usuario} onUpdateUsuario={actualizarUsuario} />
+          )}
         </main>
       </div>
     </div>
