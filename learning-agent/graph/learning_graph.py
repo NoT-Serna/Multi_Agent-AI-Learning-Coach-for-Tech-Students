@@ -1,6 +1,7 @@
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from schemas.state import AgentState
+from agents.chatbot_agent import chatbot_agent
 from agents.diagnostic_agent import (
     collect_profile,
     generate_skills,
@@ -46,6 +47,9 @@ graph.add_node("generate_roadmap",      generate_roadmap)
 graph.add_node("adjust_roadmap",        adjust_roadmap)
 graph.add_node("generate_quiz",         generate_quiz)
 graph.add_node("evaluate_quiz_answers", evaluate_quiz_answers)
+graph.add_node("chatbot_agent",         chatbot_agent)
+# chatbot_agent es un nodo lateral — sin aristas al flujo principal.
+# Se invoca directamente por el cliente con app.update_state + app.invoke.
 
 # Entry point
 graph.add_conditional_edges(
