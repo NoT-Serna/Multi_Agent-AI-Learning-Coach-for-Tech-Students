@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Lock, User, Mail, BookOpen, Sparkles, Calendar, X } from 'lucide-react';
 import { cursosDisponibles, interesesSugeridos } from '../data/cursos';
 import type { SignUpResult } from '../types/auth';
+import { registrarUsuario } from '../services/firebase';
 
 interface Props {
   onSignUp: (result: SignUpResult) => void;
@@ -67,6 +68,14 @@ export default function SignUpPage({ onSignUp, onSwitchToLogin }: Props) {
     setEnviando(true);
     try {
       const contrasenaHash = await hashContrasena(contrasena);
+      await registrarUsuario(cuenta.trim(), contrasena, {
+        nombre: nombre.trim(),
+        apellido: apellido.trim(),
+        edad,
+        intereses: [...intereses],
+        idsCursos: [...idsCursos],
+      });
+
       const result: SignUpResult = {
         auth: {
           cuenta: cuenta.trim(),
@@ -83,6 +92,10 @@ export default function SignUpPage({ onSignUp, onSwitchToLogin }: Props) {
         },
       };
       onSignUp(result);
+    } catch (firebaseError: any) {
+      setError(
+        firebaseError?.message ?? 'No se pudo registrar el usuario en Firebase.',
+      );
     } finally {
       setEnviando(false);
     }
