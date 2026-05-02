@@ -1,6 +1,9 @@
 # Created by venv; see https://docs.python.org/3/library/venv.html
 .env
 .venv
+.kiro
+.vscode
+.DS_Store
 venv/
 __pycache__/
 langfuse/
