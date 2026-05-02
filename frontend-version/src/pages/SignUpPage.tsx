@@ -93,9 +93,12 @@ export default function SignUpPage({ onSignUp, onSwitchToLogin }: Props) {
       };
       onSignUp(result);
     } catch (firebaseError: any) {
-      setError(
-        firebaseError?.message ?? 'No se pudo registrar el usuario en Firebase.',
-      );
+      const code: string = firebaseError?.code ?? '';
+      if (code === 'auth/network-request-failed') {
+        setError('Error de red: Firebase no puede conectarse. Revisa tu conexión a internet y desactiva extensiones del navegador (ad-blockers) que puedan bloquear googleapis.com.');
+      } else {
+        setError(firebaseError?.message ?? 'No se pudo registrar el usuario en Firebase.');
+      }
     } finally {
       setEnviando(false);
     }

@@ -14,6 +14,7 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
   type ReactNode,
 } from 'react';
 import { agentApi } from '../services/agentApi';
@@ -23,6 +24,7 @@ import type {
   QuizQuestion,
   QuizSubmitResponse,
   RoadmapWeek,
+  SessionState,
 } from '../types/agent';
 
 // ── Shape of the context value ────────────────────────────────────────────────
@@ -54,6 +56,9 @@ interface AgentSession {
   // UI state
   loading: boolean;
   error: string | null;
+
+  // Rehydration state
+  hydrating: boolean;
 }
 
 interface AgentSessionContextValue {
@@ -98,7 +103,31 @@ const emptySession: AgentSession = {
   quizPassed:           null,
   loading:              false,
   error:                null,
+  hydrating:            false,
 };
+
+// ── Helper: map SessionState (API) → AgentSession (context) ──────────────────
+
+function mapSessionStateToAgentSession(state: SessionState): AgentSession {
+  return {
+    sessionId:           state.session_id,
+    studentName:         state.student_name,
+    diagnosticQuestions: [],          // not returned by getSession; user must re-answer if needed
+    diagnosticComplete:  state.diagnostic_complete,
+    skillScores:         state.skill_scores,
+    strongSkills:        state.strong_skills,
+    weakSkills:          state.weak_skills,
+    learningRoadmap:     state.learning_roadmap,
+    currentWeek:         state.current_week ?? 1,
+    completedWeeks:      state.completed_weeks,
+    quizQuestions:       state.quiz_questions,
+    quizScores:          state.quiz_scores,
+    quizPassed:          state.quiz_passed,
+    loading:             false,
+    error:               null,
+    hydrating:           false,
+  };
+}
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
@@ -113,6 +142,32 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
   const setError = (error: string) =>
     setSession((s) => ({ ...s, loading: false, error }));
 
+  // ── Rehydration on mount ────────────────────────────────────────────────────
+  useEffect(() => {
+    const storedId = sessionStorage.getItem('agentSessionId');
+    if (!storedId) return;
+
+    setSession((s) => ({ ...s, hydrating: true }));
+
+    agentApi.getSession(storedId)
+      .then((state) => {
+        setSession(mapSessionStateToAgentSession(state));
+      })
+      .catch((err: Error) => {
+        // 404 means the backend session expired — clear storage
+        if (
+          err.message.includes('404') ||
+          err.message.toLowerCase().includes('not found')
+        ) {
+          sessionStorage.removeItem('agentSessionId');
+          setSession({ ...emptySession });
+        } else {
+          // Other errors: just stop hydrating, leave session empty
+          setSession((s) => ({ ...s, hydrating: false }));
+        }
+      });
+  }, []);
+
   // ── startSession ────────────────────────────────────────────────────────────
   const startSession = useCallback(async (params: {
     student_name: string;
@@ -123,6 +178,8 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       const res = await agentApi.startSession(params);
+      // Persist session ID for rehydration on page reload
+      sessionStorage.setItem('agentSessionId', res.session_id);
       setSession((s) => ({
         ...s,
         sessionId:           res.session_id,

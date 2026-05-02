@@ -60,6 +60,8 @@ export default function LoginPage({ onLogin, onSwitchToSignUp }: Props) {
         setError('Demasiados intentos fallidos. Intenta más tarde.');
       } else if (code === 'auth/invalid-email') {
         setError('El formato del correo no es válido.');
+      } else if (code === 'auth/network-request-failed') {
+        setError('Error de red: Firebase no puede conectarse. Revisa tu conexión a internet y desactiva extensiones del navegador (ad-blockers) que puedan bloquear googleapis.com.');
       } else {
         setError(err?.message ?? 'No se pudo iniciar sesión.');
       }
