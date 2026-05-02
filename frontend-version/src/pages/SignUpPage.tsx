@@ -321,13 +321,15 @@ export default function SignUpPage({ onSignUp, onSwitchToLogin }: Props) {
           )}
 
           <div className="flex items-center justify-between pt-2">
-            <button
-              type="button"
-              onClick={onSwitchToLogin}
-              className="text-sm text-indigo-600 hover:text-indigo-700"
-            >
-              ¿Ya tienes cuenta? Inicia sesión
-            </button>
+            {onSwitchToLogin && (
+              <button
+                type="button"
+                onClick={onSwitchToLogin}
+                className="text-sm text-indigo-600 hover:text-indigo-700"
+              >
+                ¿Ya tienes cuenta? Inicia sesión
+              </button>
+            )}
             <button
               type="submit"
               disabled={enviando}

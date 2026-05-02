@@ -12,7 +12,10 @@ import RecursosPage from './pages/RecursosPage';
 import CoachIAPage from './pages/CoachIAPage';
 import AjustesPage from './pages/AjustesPage';
 import SignUpPage from './pages/SignUpPage';
+import LoginPage from './pages/LoginPage';
 import type { SignUpResult, Usuario } from './types/auth';
+
+type AuthScreen = 'login' | 'signup';
 
 const titles: Record<TabId, string> = {
   dashboard: 'Dashboard',
@@ -61,9 +64,23 @@ function DashboardView() {
 export default function App() {
   const [tab, setTab] = useState<TabId>('dashboard');
   const [sesion, setSesion] = useState<SignUpResult | null>(null);
+  const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
 
   if (!sesion) {
-    return <SignUpPage onSignUp={setSesion} />;
+    if (authScreen === 'signup') {
+      return (
+        <SignUpPage
+          onSignUp={setSesion}
+          onSwitchToLogin={() => setAuthScreen('login')}
+        />
+      );
+    }
+    return (
+      <LoginPage
+        onLogin={setSesion}
+        onSwitchToSignUp={() => setAuthScreen('signup')}
+      />
+    );
   }
 
   const actualizarUsuario = (u: Usuario) => {
