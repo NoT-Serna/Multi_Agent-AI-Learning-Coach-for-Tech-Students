@@ -16,6 +16,7 @@ from agents.quiz_agent import (
     generate_quiz,
     evaluate_quiz_answers,
 )
+from agents.schedule_agent import generate_schedule
 
 # ─── Entry router ─────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ graph.add_node("generate_exam",         generate_exam)
 graph.add_node("evaluate_answers",      evaluate_answers)
 graph.add_node("generate_roadmap",      generate_roadmap)
 graph.add_node("adjust_roadmap",        adjust_roadmap)
+graph.add_node("generate_schedule",     generate_schedule)
 graph.add_node("generate_quiz",         generate_quiz)
 graph.add_node("evaluate_quiz_answers", evaluate_quiz_answers)
 graph.add_node("chatbot_agent",         chatbot_agent)
@@ -73,8 +75,9 @@ graph.add_conditional_edges(
 )
 
 # Roadmap flow
-graph.add_edge("generate_roadmap", "generate_quiz")
-graph.add_edge("adjust_roadmap",   "generate_quiz")
+graph.add_edge("generate_roadmap", "generate_schedule")
+graph.add_edge("adjust_roadmap",   "generate_schedule")
+graph.add_edge("generate_schedule", "generate_quiz")
 
 # Quiz flow
 graph.add_edge("generate_quiz", "evaluate_quiz_answers")

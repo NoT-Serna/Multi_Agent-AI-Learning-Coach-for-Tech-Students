@@ -1,27 +1,128 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, BookOpen, AlertCircle, RotateCcw, Plus } from 'lucide-react';
-import { calendarEvents, type CalendarEvent } from '../data/mockData';
+import {
+  ChevronLeft,
+  ChevronRight,
+  BookOpen,
+  AlertCircle,
+  RotateCcw,
+  Plus,
+  CheckCircle,
+  Loader2,
+  CalendarX,
+  RefreshCw,
+} from 'lucide-react';
+import type { CalendarEvent } from '../types/calendar';
+import { useStudyCalendar } from '../hooks/useStudyCalendar';
+import { markEventCompleted } from '../services/calendarService';
+import { auth } from '../services/firebase';
 
-const eventTypeStyles: Record<CalendarEvent['type'], { dot: string; bg: string; border: string; icon: typeof BookOpen; label: string }> = {
-  study: { dot: 'bg-indigo-500', bg: 'bg-indigo-50', border: 'border-indigo-200', icon: BookOpen, label: 'Estudio' },
-  deadline: { dot: 'bg-red-500', bg: 'bg-red-50', border: 'border-red-200', icon: AlertCircle, label: 'Entrega' },
-  review: { dot: 'bg-amber-500', bg: 'bg-amber-50', border: 'border-amber-200', icon: RotateCcw, label: 'Revisión' },
+const eventTypeStyles: Record<
+  CalendarEvent['type'],
+  { dot: string; bg: string; border: string; icon: typeof BookOpen; label: string }
+> = {
+  study:    { dot: 'bg-indigo-500', bg: 'bg-indigo-50',  border: 'border-indigo-200', icon: BookOpen,     label: 'Estudio'  },
+  deadline: { dot: 'bg-red-500',    bg: 'bg-red-50',     border: 'border-red-200',    icon: AlertCircle,  label: 'Entrega'  },
+  review:   { dot: 'bg-amber-500',  bg: 'bg-amber-50',   border: 'border-amber-200',  icon: RotateCcw,    label: 'Revisión' },
 };
 
 const daysOfWeek = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
+const MONTH_NAMES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+];
+
 export default function CalendarioPage() {
-  const [selectedDay, setSelectedDay] = useState(10);
-  const year = 2026;
-  const month = 3;
+  const today = new Date();
+  const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDay, setSelectedDay] = useState(today.getDate());
+  const [markError, setMarkError] = useState<string | null>(null);
+
+  const { events, loading, error, retry } = useStudyCalendar();
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
   const firstDay = (new Date(year, month, 1).getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  const dateStr = (d: number) => `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  const eventsForDay = (d: number) => calendarEvents.filter((e) => e.date === dateStr(d));
+  const dateStr = (d: number) =>
+    `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+  const eventsForDay = (d: number) => events.filter((e) => e.date === dateStr(d));
   const selectedEvents = eventsForDay(selectedDay);
 
   const legend: CalendarEvent['type'][] = ['study', 'deadline', 'review'];
+
+  const prevMonth = () => setViewDate(new Date(year, month - 1, 1));
+  const nextMonth = () => setViewDate(new Date(year, month + 1, 1));
+
+  // ── Marcar evento como completado (actualización optimista) ────────────────
+  const [localEvents, setLocalEvents] = useState<CalendarEvent[] | null>(null);
+  const displayEvents = localEvents ?? events;
+
+  const handleMarkCompleted = async (eventId: string) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+
+    // Actualización optimista
+    setLocalEvents((prev) =>
+      (prev ?? events).map((e) => (e.id === eventId ? { ...e, completed: true } : e)),
+    );
+    setMarkError(null);
+
+    try {
+      await markEventCompleted(uid, eventId);
+      // Firestore onSnapshot actualizará `events` — limpiar estado local
+      setLocalEvents(null);
+    } catch {
+      // Rollback
+      setLocalEvents(null);
+      setMarkError('No se pudo guardar el cambio. Intenta de nuevo.');
+    }
+  };
+
+  // ── Estados de carga / error / vacío ──────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-slate-400">
+        <Loader2 className="w-8 h-8 animate-spin" />
+        <p className="text-sm">Cargando tu calendario...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4 text-slate-500">
+        <AlertCircle className="w-10 h-10 text-red-400" />
+        <p className="text-sm font-medium">No se pudo cargar el calendario.</p>
+        <button
+          onClick={retry}
+          className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+        >
+          <RefreshCw className="w-4 h-4" />
+          Reintentar
+        </button>
+      </div>
+    );
+  }
+
+  if (displayEvents.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-slate-400">
+        <CalendarX className="w-10 h-10" />
+        <p className="text-sm font-medium text-slate-600">
+          Completa el diagnóstico para generar tu calendario
+        </p>
+        <p className="text-xs text-slate-400">
+          Una vez que el agente genere tu plan de estudio, verás aquí tus sesiones diarias.
+        </p>
+      </div>
+    );
+  }
+
+  // ── Vista principal del calendario ────────────────────────────────────────
 
   return (
     <div className="space-y-6">
@@ -36,15 +137,33 @@ export default function CalendarioPage() {
         </button>
       </div>
 
+      {markError && (
+        <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-2 rounded-lg">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          {markError}
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-6">
+        {/* Calendario mensual */}
         <div className="col-span-2 bg-white rounded-xl border border-slate-200 p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <button className="p-1.5 rounded hover:bg-slate-100 text-slate-400">
+              <button
+                onClick={prevMonth}
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-400"
+                aria-label="Mes anterior"
+              >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="text-base font-semibold text-slate-800">Abril 2026</span>
-              <button className="p-1.5 rounded hover:bg-slate-100 text-slate-400">
+              <span className="text-base font-semibold text-slate-800">
+                {MONTH_NAMES[month]} {year}
+              </span>
+              <button
+                onClick={nextMonth}
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-400"
+                aria-label="Mes siguiente"
+              >
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
@@ -60,38 +179,57 @@ export default function CalendarioPage() {
 
           <div className="grid grid-cols-7 gap-1 mb-1">
             {daysOfWeek.map((d) => (
-              <div key={d} className="text-center text-xs font-medium text-slate-400 py-2">{d}</div>
+              <div key={d} className="text-center text-xs font-medium text-slate-400 py-2">
+                {d}
+              </div>
             ))}
           </div>
 
           <div className="grid grid-cols-7 gap-1">
-            {Array.from({ length: firstDay }).map((_, i) => <div key={`e-${i}`} />)}
+            {Array.from({ length: firstDay }).map((_, i) => (
+              <div key={`e-${i}`} />
+            ))}
             {Array.from({ length: daysInMonth }).map((_, i) => {
               const day = i + 1;
-              const events = eventsForDay(day);
+              const dayEvents = eventsForDay(day);
               const isSelected = day === selectedDay;
+              const isToday =
+                day === today.getDate() &&
+                month === today.getMonth() &&
+                year === today.getFullYear();
+
               return (
                 <button
                   key={day}
                   onClick={() => setSelectedDay(day)}
                   className={`min-h-[72px] text-left p-2 rounded-lg border transition-colors ${
-                    isSelected ? 'bg-indigo-500 text-white border-indigo-500' : 'border-slate-100 hover:bg-slate-50 text-slate-700'
+                    isSelected
+                      ? 'bg-indigo-500 text-white border-indigo-500'
+                      : isToday
+                      ? 'border-indigo-300 bg-indigo-50 text-slate-700'
+                      : 'border-slate-100 hover:bg-slate-50 text-slate-700'
                   }`}
                 >
-                  <div className="text-sm font-semibold">{day}</div>
+                  <div className={`text-sm font-semibold ${isToday && !isSelected ? 'text-indigo-600' : ''}`}>
+                    {day}
+                  </div>
                   <div className="mt-1 space-y-0.5">
-                    {events.slice(0, 2).map((e) => (
+                    {dayEvents.slice(0, 2).map((e) => (
                       <div
                         key={e.id}
                         className={`text-[10px] truncate px-1 py-0.5 rounded ${
-                          isSelected ? 'bg-white/20 text-white' : `${eventTypeStyles[e.type].bg} ${eventTypeStyles[e.type].border} border`
+                          isSelected
+                            ? 'bg-white/20 text-white'
+                            : `${eventTypeStyles[e.type].bg} ${eventTypeStyles[e.type].border} border ${e.completed ? 'opacity-50 line-through' : ''}`
                         }`}
                       >
                         {e.title}
                       </div>
                     ))}
-                    {events.length > 2 && (
-                      <div className={`text-[10px] ${isSelected ? 'text-white/80' : 'text-slate-400'}`}>+{events.length - 2}</div>
+                    {dayEvents.length > 2 && (
+                      <div className={`text-[10px] ${isSelected ? 'text-white/80' : 'text-slate-400'}`}>
+                        +{dayEvents.length - 2}
+                      </div>
                     )}
                   </div>
                 </button>
@@ -100,9 +238,12 @@ export default function CalendarioPage() {
           </div>
         </div>
 
+        {/* Panel de eventos del día seleccionado */}
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h3 className="font-semibold text-slate-800 mb-1">Día seleccionado</h3>
-          <p className="text-sm text-slate-500 mb-4">{selectedDay} de Abril 2026</p>
+          <p className="text-sm text-slate-500 mb-4">
+            {selectedDay} de {MONTH_NAMES[month]} {year}
+          </p>
 
           <div className="space-y-2">
             {selectedEvents.length === 0 && (
@@ -112,13 +253,33 @@ export default function CalendarioPage() {
               const style = eventTypeStyles[e.type];
               const Icon = style.icon;
               return (
-                <div key={e.id} className={`p-3 rounded-lg border ${style.border} ${style.bg}`}>
+                <div
+                  key={e.id}
+                  className={`p-3 rounded-lg border ${style.border} ${style.bg} ${e.completed ? 'opacity-60' : ''}`}
+                >
                   <div className="flex items-start gap-2">
-                    <Icon className="w-4 h-4 mt-0.5 text-slate-700" />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-slate-800">{e.title}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">{e.time} · {style.label}</p>
+                    <Icon className="w-4 h-4 mt-0.5 text-slate-700 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-medium text-slate-800 ${e.completed ? 'line-through' : ''}`}>
+                        {e.title}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {e.time} · {style.label}
+                      </p>
                     </div>
+                    {e.type === 'study' && !e.completed && (
+                      <button
+                        onClick={() => handleMarkCompleted(e.id)}
+                        className="flex-shrink-0 text-slate-400 hover:text-indigo-500 transition-colors"
+                        aria-label="Marcar como completado"
+                        title="Marcar como completado"
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                      </button>
+                    )}
+                    {e.completed && (
+                      <CheckCircle className="w-4 h-4 flex-shrink-0 text-green-500" />
+                    )}
                   </div>
                 </div>
               );
