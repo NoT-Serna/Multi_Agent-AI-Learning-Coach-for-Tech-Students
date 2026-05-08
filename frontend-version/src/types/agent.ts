@@ -1,5 +1,24 @@
 // ── Types that mirror the FastAPI response models ────────────────────────────
 
+// Calendar event as returned by the backend (no `id` — Firestore assigns it)
+export type CalendarEventPayload = {
+  date: string;
+  title: string;
+  time: string;
+  type: 'study' | 'review' | 'deadline';
+  moduleNumber: number;
+  week: number;
+  completed: boolean;
+  description?: string;
+  duration_minutes?: number;
+  resource_url?: string;
+  resource_label?: string;
+  tips?: string[];
+  objective?: string;
+  difficulty?: string;
+  category?: string;
+};
+
 export interface DiagnosticQuestion {
   id: string;
   category: string;
@@ -47,6 +66,7 @@ export interface DiagnosticSubmitResponse {
   strong_skills: string[];
   weak_skills: string[];
   learning_roadmap: RoadmapWeek[];
+  study_calendar: CalendarEventPayload[];
   quiz_questions: QuizQuestion[];
   current_week: number;
   message: string;
@@ -60,6 +80,7 @@ export interface QuizSubmitResponse {
   completed_weeks: number[];
   quiz_scores: Record<string, number>;
   learning_roadmap: RoadmapWeek[];
+  study_calendar: CalendarEventPayload[];
   quiz_questions: QuizQuestion[];
   message: string;
 }

@@ -10,6 +10,10 @@ import {
   Loader2,
   CalendarX,
   RefreshCw,
+  Clock,
+  ExternalLink,
+  Lightbulb,
+  Target,
 } from 'lucide-react';
 import type { CalendarEvent } from '../types/calendar';
 import { useStudyCalendar } from '../hooks/useStudyCalendar';
@@ -239,13 +243,13 @@ export default function CalendarioPage() {
         </div>
 
         {/* Panel de eventos del día seleccionado */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5">
+        <div className="bg-white rounded-xl border border-slate-200 p-5 overflow-y-auto">
           <h3 className="font-semibold text-slate-800 mb-1">Día seleccionado</h3>
           <p className="text-sm text-slate-500 mb-4">
             {selectedDay} de {MONTH_NAMES[month]} {year}
           </p>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             {selectedEvents.length === 0 && (
               <p className="text-sm text-slate-400 py-8 text-center">Sin eventos programados</p>
             )}
@@ -255,17 +259,29 @@ export default function CalendarioPage() {
               return (
                 <div
                   key={e.id}
-                  className={`p-3 rounded-lg border ${style.border} ${style.bg} ${e.completed ? 'opacity-60' : ''}`}
+                  className={`rounded-lg border ${style.border} ${style.bg} ${e.completed ? 'opacity-60' : ''}`}
                 >
-                  <div className="flex items-start gap-2">
+                  {/* Cabecera del evento */}
+                  <div className="flex items-start gap-2 p-3">
                     <Icon className="w-4 h-4 mt-0.5 text-slate-700 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-medium text-slate-800 ${e.completed ? 'line-through' : ''}`}>
+                      <p className={`text-sm font-semibold text-slate-800 ${e.completed ? 'line-through' : ''}`}>
                         {e.title}
                       </p>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {e.time} · {style.label}
-                      </p>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <span className="text-xs text-slate-500">{e.time} · {style.label}</span>
+                        {e.difficulty && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-white/60 border border-current text-slate-500">
+                            {e.difficulty}
+                          </span>
+                        )}
+                        {e.duration_minutes && (
+                          <span className="flex items-center gap-0.5 text-xs text-slate-500">
+                            <Clock className="w-3 h-3" />
+                            {e.duration_minutes} min
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {e.type === 'study' && !e.completed && (
                       <button
@@ -281,6 +297,54 @@ export default function CalendarioPage() {
                       <CheckCircle className="w-4 h-4 flex-shrink-0 text-green-500" />
                     )}
                   </div>
+
+                  {/* Descripción / recomendación */}
+                  {e.description && (
+                    <div className="px-3 pb-2">
+                      <p className="text-xs text-slate-600 leading-relaxed">{e.description}</p>
+                    </div>
+                  )}
+
+                  {/* Objetivo */}
+                  {e.objective && e.type === 'study' && (
+                    <div className="px-3 pb-2 flex items-start gap-1.5">
+                      <Target className="w-3 h-3 mt-0.5 text-slate-400 flex-shrink-0" />
+                      <p className="text-xs text-slate-500 italic">{e.objective}</p>
+                    </div>
+                  )}
+
+                  {/* Recurso */}
+                  {e.resource_url && e.resource_label && (
+                    <div className="px-3 pb-2">
+                      <a
+                        href={e.resource_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        {e.resource_label}
+                      </a>
+                    </div>
+                  )}
+
+                  {/* Consejos */}
+                  {e.tips && e.tips.length > 0 && (
+                    <div className="px-3 pb-3 border-t border-white/50 pt-2 mt-1">
+                      <div className="flex items-center gap-1 mb-1.5">
+                        <Lightbulb className="w-3 h-3 text-amber-500" />
+                        <span className="text-xs font-medium text-slate-600">Consejos</span>
+                      </div>
+                      <ul className="space-y-1">
+                        {e.tips.map((tip, i) => (
+                          <li key={i} className="text-xs text-slate-500 flex items-start gap-1">
+                            <span className="text-slate-300 mt-0.5">•</span>
+                            {tip}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, BookOpen, AlertCircle, RotateCcw, Loader2, CalendarX } from 'lucide-react';
+import { ChevronLeft, ChevronRight, BookOpen, AlertCircle, RotateCcw, Loader2, CalendarX, Clock } from 'lucide-react';
 import type { CalendarEvent } from '../types/calendar';
 import { useStudyCalendar } from '../hooks/useStudyCalendar';
 
@@ -164,13 +164,28 @@ export default function CalendarWidget() {
               return (
                 <div
                   key={event.id}
-                  className={`flex items-center gap-2 p-2 rounded-lg border text-sm ${style.bg} ${event.completed ? 'opacity-50' : ''}`}
+                  className={`flex items-start gap-2 p-2 rounded-lg border text-sm ${style.bg} ${event.completed ? 'opacity-50' : ''}`}
                 >
-                  <EventIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className={`flex-1 font-medium text-xs ${event.completed ? 'line-through' : ''}`}>
-                    {event.title}
-                  </span>
-                  <span className="text-xs opacity-75">{event.time}</span>
+                  <EventIcon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <span className={`block font-medium text-xs ${event.completed ? 'line-through' : ''}`}>
+                      {event.title}
+                    </span>
+                    {event.description && (
+                      <span className="block text-xs opacity-70 truncate mt-0.5">
+                        {event.description}
+                      </span>
+                    )}
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs opacity-75">{event.time}</span>
+                      {event.duration_minutes && (
+                        <span className="flex items-center gap-0.5 text-xs opacity-60">
+                          <Clock className="w-2.5 h-2.5" />
+                          {event.duration_minutes} min
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               );
             })}

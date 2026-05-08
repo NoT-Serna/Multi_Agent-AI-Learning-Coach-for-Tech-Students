@@ -219,6 +219,7 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         loading:            false,
         error:              null,
       }));
+
       return res;
     } catch (err) {
       setError((err as Error).message);
@@ -251,6 +252,7 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         loading:         false,
         error:           null,
       }));
+
       return res;
     } catch (err) {
       setError((err as Error).message);

@@ -8,3 +8,7 @@ venv/
 __pycache__/
 langfuse/
 *.pyc
+
+# Firebase service account credentials — NEVER commit these
+*serviceAccountKey*.json
+*service_account*.json

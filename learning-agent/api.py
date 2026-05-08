@@ -86,6 +86,7 @@ class DiagnosticSubmitResponse(BaseModel):
     strong_skills: list[str]
     weak_skills: list[str]
     learning_roadmap: list[dict]
+    study_calendar: list[dict]
     quiz_questions: list[dict]
     current_week: int
     message: str
@@ -104,6 +105,7 @@ class QuizSubmitResponse(BaseModel):
     completed_weeks: list[int]
     quiz_scores: dict[str, float]
     learning_roadmap: list[dict]
+    study_calendar: list[dict]
     quiz_questions: list[dict]
     message: str
 
@@ -168,6 +170,8 @@ def _build_initial_state(req: StartSessionRequest, session_id: str) -> dict:
         "next_step":            None,
         "error_message":        None,
         "messages":             [],
+        "study_calendar":       [],
+        "roadmap_start_date":   None,
     }
 
 
@@ -237,6 +241,7 @@ def submit_diagnostic(req: DiagnosticSubmitRequest):
         strong_skills   = state.get("strong_skills",    []),
         weak_skills     = state.get("weak_skills",      []),
         learning_roadmap= state.get("learning_roadmap", []),
+        study_calendar  = state.get("study_calendar",   []),
         quiz_questions  = state.get("quiz_questions",   []),
         current_week    = state.get("current_week",     1),
         message         = _last_ai_message(state),
@@ -274,6 +279,7 @@ def submit_quiz(req: QuizSubmitRequest):
         completed_weeks = state.get("completed_weeks",  []),
         quiz_scores     = quiz_scores,
         learning_roadmap= state.get("learning_roadmap", []),
+        study_calendar  = state.get("study_calendar",   []),
         quiz_questions  = state.get("quiz_questions",   []),
         message         = _last_ai_message(state),
     )

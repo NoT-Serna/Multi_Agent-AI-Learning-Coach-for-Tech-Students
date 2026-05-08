@@ -1,22 +1,27 @@
 """
 schedule_agent.py
 Nodo LangGraph que transforma el learning_roadmap en un Study_Calendar
-con fechas ISO 8601 y lo persiste en Firestore.
+con fechas ISO 8601, recomendaciones diarias de estudio y lo persiste en Firestore.
 """
 
 import json
 import logging
 import os
+import re
 from datetime import date, timedelta
 from typing import Dict, List, Literal, Optional
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from pydantic import BaseModel, ValidationError, field_validator
 from tenacity import retry, stop_after_attempt, wait_fixed
 
+from agents.llm_factory import build_llm
 from schemas.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+# ─── LLM ──────────────────────────────────────────────────────────────────────
+_llm, _llm_json = build_llm()
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -28,7 +33,16 @@ STUDY_TIME = "09:00"
 REVIEW_TIME = "10:00"
 
 
-# ─── Modelo Pydantic ──────────────────────────────────────────────────────────
+# ─── Modelos Pydantic ─────────────────────────────────────────────────────────
+
+class DailyRecommendation(BaseModel):
+    """Recomendación de estudio para un día específico."""
+    description: str          # Qué estudiar y por qué
+    duration_minutes: int     # Duración estimada en minutos
+    resource_url: str         # URL del recurso principal
+    resource_label: str       # Etiqueta legible del recurso
+    tips: List[str]           # 2-3 consejos concretos para esa sesión
+
 
 class CalendarEventModel(BaseModel):
     date: str
@@ -38,11 +52,19 @@ class CalendarEventModel(BaseModel):
     moduleNumber: int
     week: int
     completed: bool = False
+    # Campos enriquecidos de recomendación (opcionales para eventos de review)
+    description: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    resource_url: Optional[str] = None
+    resource_label: Optional[str] = None
+    tips: Optional[List[str]] = None
+    objective: Optional[str] = None
+    difficulty: Optional[str] = None
+    category: Optional[str] = None
 
     @field_validator("date")
     @classmethod
     def validate_date_format(cls, v: str) -> str:
-        import re
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
             raise ValueError(f"date must be YYYY-MM-DD, got: {v}")
         return v
@@ -50,7 +72,6 @@ class CalendarEventModel(BaseModel):
     @field_validator("time")
     @classmethod
     def validate_time_format(cls, v: str) -> str:
-        import re
         if not re.match(r"^\d{2}:\d{2}$", v):
             raise ValueError(f"time must be HH:MM, got: {v}")
         return v
@@ -87,17 +108,110 @@ def _get_saturday(week_start: date) -> date:
     return week_start + timedelta(days=REVIEW_DAY_OFFSET)
 
 
+def _parse_json(text: str) -> dict:
+    """Extrae y parsea el primer bloque JSON de un texto."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError(f"No JSON found in LLM response:\n{text}")
+        return json.loads(text[start:end])
+
+
+def _generate_daily_recommendations(
+    roadmap: List[Dict],
+    student_name: str,
+    weak_skills: List[str],
+    user_preferences: str,
+) -> Dict[str, DailyRecommendation]:
+    """
+    Llama al LLM para generar recomendaciones diarias detalladas por módulo.
+    Retorna un dict con clave "{week}_{module_number}" → DailyRecommendation.
+    """
+    # Construir resumen del roadmap para el prompt
+    roadmap_summary = []
+    for week_data in roadmap:
+        week_num = week_data.get("week", 0)
+        for mod in week_data.get("modules", []):
+            roadmap_summary.append({
+                "week": week_num,
+                "module_number": mod.get("module_number"),
+                "name": mod.get("name"),
+                "objective": mod.get("objective"),
+                "resource": mod.get("resource", ""),
+                "difficulty": mod.get("difficulty", "básico"),
+                "category": mod.get("category", ""),
+            })
+
+    response = _llm_json.invoke([
+        SystemMessage(content="""Eres un coach de aprendizaje experto en tecnología.
+Tu tarea es generar recomendaciones de estudio detalladas para cada módulo del plan de un estudiante.
+
+Para cada módulo debes proporcionar:
+- Una descripción clara de qué estudiar ese día y por qué es importante
+- La duración estimada en minutos (entre 60 y 180)
+- La URL del recurso principal (usa el recurso del módulo si tiene URL, si no genera una URL real de un recurso conocido como MDN, freeCodeCamp, docs oficiales, etc.)
+- Una etiqueta legible para el recurso (ej: "MDN Web Docs", "freeCodeCamp", "Documentación oficial de React")
+- 2 o 3 consejos concretos y accionables para esa sesión de estudio
+
+Responde ÚNICAMENTE con JSON válido:
+{
+  "recommendations": [
+    {
+      "week": 1,
+      "module_number": 1,
+      "description": "descripción de qué estudiar y por qué",
+      "duration_minutes": 90,
+      "resource_url": "https://...",
+      "resource_label": "nombre del recurso",
+      "tips": ["consejo 1", "consejo 2", "consejo 3"]
+    }
+  ]
+}"""),
+        HumanMessage(content=f"""Estudiante: {student_name}
+Habilidades débiles a reforzar: {', '.join(weak_skills) if weak_skills else 'ninguna específica'}
+Intereses: {user_preferences}
+
+Módulos del plan:
+{json.dumps(roadmap_summary, ensure_ascii=False, indent=2)}
+
+Genera recomendaciones detalladas para cada módulo."""),
+    ])
+
+    data = _parse_json(response.content)
+    recommendations: Dict[str, DailyRecommendation] = {}
+
+    for rec in data.get("recommendations", []):
+        key = f"{rec.get('week')}_{rec.get('module_number')}"
+        try:
+            recommendations[key] = DailyRecommendation(
+                description=rec.get("description", ""),
+                duration_minutes=int(rec.get("duration_minutes", 90)),
+                resource_url=rec.get("resource_url", ""),
+                resource_label=rec.get("resource_label", "Recurso"),
+                tips=rec.get("tips", []),
+            )
+        except (ValidationError, TypeError, ValueError) as exc:
+            logger.warning("Recomendación inválida para clave %s: %s", key, exc)
+
+    return recommendations
+
+
 def _build_calendar_events(
     roadmap: List[Dict],
     start_date: date,
     completed_weeks: List[int],
     existing_events: List[Dict],
+    recommendations: Dict[str, DailyRecommendation],
 ) -> List[CalendarEventModel]:
     """
-    Función pura. Transforma el roadmap en una lista plana de CalendarEventModel.
+    Función pura. Transforma el roadmap en una lista plana de CalendarEventModel
+    enriquecidos con recomendaciones diarias.
 
     - Para semanas en `completed_weeks`, preserva los eventos de `existing_events`.
-    - Para las demás semanas, genera nuevos eventos con fechas calculadas.
+    - Para las demás semanas, genera nuevos eventos con fechas y recomendaciones.
     - Asigna moduleNumber=0 y type="review" al evento del sábado.
     """
     # Indexar eventos existentes por semana para preservación rápida
@@ -112,6 +226,7 @@ def _build_calendar_events(
     for week_data in roadmap:
         week_num: int = week_data.get("week", 0)
         modules: List[Dict] = week_data.get("modules", [])
+        week_focus: str = week_data.get("focus", "")
 
         # Preservar semanas completadas
         if week_num in completed_weeks:
@@ -128,8 +243,10 @@ def _build_calendar_events(
         # Generar eventos de estudio (3 módulos → lun, mié, vie)
         for idx, module in enumerate(modules[:3]):
             module_number = module.get("module_number", idx + 1)
-            day_offset = idx  # índice 0→lunes, 1→miércoles, 2→viernes
-            event_date = study_days[day_offset]
+            event_date = study_days[idx]
+            rec_key = f"{week_num}_{module_number}"
+            rec = recommendations.get(rec_key)
+
             try:
                 events.append(CalendarEventModel(
                     date=event_date.isoformat(),
@@ -139,6 +256,15 @@ def _build_calendar_events(
                     moduleNumber=module_number,
                     week=week_num,
                     completed=False,
+                    # Campos enriquecidos
+                    description=rec.description if rec else module.get("objective", ""),
+                    duration_minutes=rec.duration_minutes if rec else 90,
+                    resource_url=rec.resource_url if rec else "",
+                    resource_label=rec.resource_label if rec else module.get("resource", ""),
+                    tips=rec.tips if rec else [],
+                    objective=module.get("objective", ""),
+                    difficulty=module.get("difficulty", "básico"),
+                    category=module.get("category", ""),
                 ))
             except (ValidationError, TypeError) as exc:
                 logger.error("Error al crear evento de estudio semana %d módulo %d: %s",
@@ -155,6 +281,9 @@ def _build_calendar_events(
                 moduleNumber=0,
                 week=week_num,
                 completed=False,
+                description=f"Revisión y quiz de la semana {week_num}: {week_focus}",
+                duration_minutes=45,
+                tips=["Repasa los apuntes de los 3 módulos", "Intenta el quiz sin consultar recursos", "Anota las dudas para el coach"],
             ))
         except (ValidationError, TypeError) as exc:
             logger.error("Error al crear evento de revisión semana %d: %s", week_num, exc)
@@ -211,8 +340,8 @@ def _write_calendar_to_firestore(uid: str, events: List[CalendarEventModel]) -> 
 def generate_schedule(state: AgentState) -> AgentState:
     """
     Nodo LangGraph. Lee learning_roadmap, student_id y roadmap_start_date
-    del estado, genera el Study_Calendar y lo persiste en Firestore.
-    Retorna el estado con study_calendar añadido.
+    del estado, genera el Study_Calendar con recomendaciones diarias y lo
+    persiste en Firestore.
 
     Invariantes:
     - No modifica: learning_roadmap, current_week, quiz_questions, quiz_answers
@@ -221,6 +350,9 @@ def generate_schedule(state: AgentState) -> AgentState:
     """
     roadmap: List[Dict] = state.get("learning_roadmap") or []
     student_id: Optional[str] = state.get("student_id")
+    student_name: str = state.get("student_name") or "Estudiante"
+    weak_skills: List[str] = state.get("weak_skills") or []
+    user_preferences: str = state.get("user_preferences") or "programación en general"
     completed_weeks: List[int] = state.get("completed_weeks") or []
     existing_calendar: List[Dict] = state.get("study_calendar") or []
 
@@ -245,8 +377,24 @@ def generate_schedule(state: AgentState) -> AgentState:
     else:
         start_date = _nearest_monday(date.today())
 
-    # Generar eventos
-    events = _build_calendar_events(roadmap, start_date, completed_weeks, existing_calendar)
+    # Generar recomendaciones diarias con el LLM
+    # Solo para semanas que no están completadas (evitar llamadas innecesarias)
+    pending_weeks = [w for w in roadmap if w.get("week", 0) not in completed_weeks]
+    recommendations: Dict[str, DailyRecommendation] = {}
+    if pending_weeks:
+        try:
+            recommendations = _generate_daily_recommendations(
+                pending_weeks, student_name, weak_skills, user_preferences
+            )
+            logger.info("Recomendaciones generadas: %d módulos", len(recommendations))
+        except Exception as exc:
+            logger.warning("No se pudieron generar recomendaciones con LLM: %s. "
+                           "Se usarán los datos del roadmap como fallback.", exc)
+
+    # Generar eventos del calendario
+    events = _build_calendar_events(
+        roadmap, start_date, completed_weeks, existing_calendar, recommendations
+    )
 
     # Persistir en Firestore
     try:
@@ -261,6 +409,7 @@ def generate_schedule(state: AgentState) -> AgentState:
     msg = AIMessage(content=(
         f"Tu calendario de estudio ha sido generado con {len(events)} eventos "
         f"distribuidos en {len(roadmap)} semanas. "
+        "Cada sesión incluye una descripción detallada, duración estimada y recursos recomendados. "
         "Puedes verlo en la sección Calendario de la app."
     ))
 

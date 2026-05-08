@@ -18,6 +18,7 @@ import LoginPage from './pages/LoginPage';
 import { useAgentSession } from './context/AgentSessionContext';
 import { cursosDisponibles } from './data/cursos';
 import type { SignUpResult, Usuario } from './types/auth';
+import { escucharAutenticacion, obtenerUsuario } from './services/firebase';
 
 type AuthScreen = 'login' | 'signup';
 
@@ -69,8 +70,50 @@ export default function App() {
   const [tab, setTab] = useState<TabId>('dashboard');
   const [sesion, setSesion] = useState<SignUpResult | null>(null);
   const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
+  // true mientras Firebase resuelve si hay sesión persistida
+  const [authChecking, setAuthChecking] = useState(true);
 
   const { session, startSession, clearError } = useAgentSession();
+
+  // ── Persistencia de sesión: escuchar Firebase Auth al arrancar ─────────────
+  useEffect(() => {
+    const unsub = escucharAutenticacion(async (firebaseUser) => {
+      if (firebaseUser) {
+        // Usuario autenticado (sesión persistida o recién logueado)
+        // Si ya tenemos sesion en estado, no sobreescribir
+        if (!sesion) {
+          try {
+            const datos = await obtenerUsuario(firebaseUser.uid);
+            if (datos) {
+              const usuario: Usuario = {
+                id: firebaseUser.uid as unknown as number,
+                cuenta: datos.cuenta ?? firebaseUser.email ?? '',
+                nombre: datos.nombre ?? '',
+                apellido: datos.apellido ?? '',
+                edad: datos.edad ?? '',
+                intereses: datos.intereses ?? [],
+                idsCursos: datos.idsCursos ?? [],
+              };
+              setSesion({
+                auth: { cuenta: usuario.cuenta, contrasenaHash: '' },
+                usuario,
+              });
+            }
+          } catch (err) {
+            console.error('Error al restaurar sesión desde Firestore:', err);
+          }
+        }
+      } else {
+        // No autenticado
+        setSesion(null);
+      }
+      setAuthChecking(false);
+    });
+
+    return () => unsub();
+    // Solo al montar — sesion intencionalmente excluida para no re-ejecutar
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Trigger startSession when Firebase auth completes ──────────────────────
   useEffect(() => {
@@ -91,6 +134,11 @@ export default function App() {
       student_id:      String(sesion.usuario.id),
     });
   }, [sesion, session.sessionId, session.loading, session.error, startSession]);
+
+  // ── Esperar a que Firebase resuelva el estado de auth ─────────────────────
+  if (authChecking) {
+    return <FullScreenLoader message="Verificando sesión…" />;
+  }
 
   // ── Rehydration / loading guard ────────────────────────────────────────────
   if (session.hydrating) {
