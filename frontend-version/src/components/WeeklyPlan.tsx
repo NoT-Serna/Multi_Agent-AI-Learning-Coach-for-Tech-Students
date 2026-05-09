@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import {
-  CheckCircle2, Circle, Play, BookOpen, Code, FileText, Video, RotateCcw,
+  CheckCircle2, Circle, Play, BookOpen, Code, FileText, Video, RotateCcw, Loader2,
 } from 'lucide-react';
 import { weeklyTasks, type WeeklyTask } from '../data/mockData';
 import { useAgentSession } from '../context/AgentSessionContext';
+import { useWeekProgress } from '../hooks/useWeekProgress';
+import { registrarActividad } from '../services/dashboardStatsService';
 import type { RoadmapModule } from '../types/agent';
+import { getAuth } from 'firebase/auth';
 
 // ── Mock-data display helpers ─────────────────────────────────────────────────
 
@@ -60,24 +63,30 @@ function categoryToIcon(category: string): typeof Code {
 export default function WeeklyPlan() {
   const { session } = useAgentSession();
 
+  const uid = getAuth().currentUser?.uid ?? null;
+
   const hasRoadmap = session.learningRoadmap.length > 0;
   const currentWeekData = hasRoadmap
     ? session.learningRoadmap[session.currentWeek - 1] ?? session.learningRoadmap[0]
     : null;
 
-  // ── Roadmap mode ───────────────────────────────────────────────────────────
-  const [completedModules, setCompletedModules] = useState<Set<number>>(new Set());
+  // ── Roadmap mode — persistent state via useWeekProgress ───────────────────
+  const { completedModules, loading, toggleModule } = useWeekProgress(
+    hasRoadmap ? uid : null,
+    session.currentWeek,
+  );
 
-  const toggleModule = (moduleNumber: number) => {
-    setCompletedModules((prev) => {
-      const next = new Set(prev);
-      if (next.has(moduleNumber)) {
-        next.delete(moduleNumber);
-      } else {
-        next.add(moduleNumber);
-      }
-      return next;
-    });
+  const handleToggleModule = (moduleNumber: number) => {
+    // Fire-and-forget: toggle in Firestore
+    toggleModule(moduleNumber);
+
+    // Also register activity for today (async, silent — Req 1.1)
+    if (uid !== null) {
+      const today = new Date().toISOString().slice(0, 10);
+      registrarActividad(uid, today).catch((err) => {
+        console.error('WeeklyPlan: failed to register activity:', err);
+      });
+    }
   };
 
   if (hasRoadmap && currentWeekData) {
@@ -107,69 +116,75 @@ export default function WeeklyPlan() {
           </div>
         </div>
 
-        <div className="space-y-2">
-          {modules.map((mod) => {
-            const done = completedModules.has(mod.module_number);
-            const Icon = categoryToIcon(mod.category);
-            return (
-              <div
-                key={mod.module_number}
-                className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
-                  done
-                    ? 'bg-slate-50 border-slate-100'
-                    : 'bg-white border-slate-200 hover:border-indigo-200'
-                }`}
-              >
-                <button
-                  onClick={() => toggleModule(mod.module_number)}
-                  className="flex-shrink-0"
-                  aria-label={done ? 'Marcar como pendiente' : 'Marcar como completado'}
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {modules.map((mod) => {
+              const done = completedModules.has(mod.module_number);
+              const Icon = categoryToIcon(mod.category);
+              return (
+                <div
+                  key={mod.module_number}
+                  className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
+                    done
+                      ? 'bg-slate-50 border-slate-100'
+                      : 'bg-white border-slate-200 hover:border-indigo-200'
+                  }`}
                 >
-                  {done ? (
-                    <CheckCircle2 className="w-5 h-5 text-green-500" />
-                  ) : (
-                    <Circle className="w-5 h-5 text-slate-300 hover:text-indigo-400" />
-                  )}
-                </button>
+                  <button
+                    onClick={() => handleToggleModule(mod.module_number)}
+                    className="flex-shrink-0"
+                    aria-label={done ? 'Marcar como pendiente' : 'Marcar como completado'}
+                  >
+                    {done ? (
+                      <CheckCircle2 className="w-5 h-5 text-green-500" />
+                    ) : (
+                      <Circle className="w-5 h-5 text-slate-300 hover:text-indigo-400" />
+                    )}
+                  </button>
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p
-                      className={`text-sm font-medium ${
-                        done ? 'text-slate-400 line-through' : 'text-slate-700'
-                      }`}
-                    >
-                      {mod.name}
-                    </p>
-                    <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${difficultyColors[mod.difficulty]}`}>
-                      {difficultyLabels[mod.difficulty]}
-                    </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p
+                        className={`text-sm font-medium ${
+                          done ? 'text-slate-400 line-through' : 'text-slate-700'
+                        }`}
+                      >
+                        {mod.name}
+                      </p>
+                      <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${difficultyColors[mod.difficulty]}`}>
+                        {difficultyLabels[mod.difficulty]}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5 truncate">{mod.objective}</p>
+                    {mod.resource && (
+                      <p className="text-xs text-indigo-500 mt-0.5 truncate">{mod.resource}</p>
+                    )}
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5 truncate">{mod.objective}</p>
-                  {mod.resource && (
-                    <p className="text-xs text-indigo-500 mt-0.5 truncate">{mod.resource}</p>
-                  )}
-                </div>
 
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium bg-slate-100 text-slate-500`}>
-                    <Icon className="w-3 h-3 inline mr-0.5" />
-                    {mod.category}
-                  </span>
-                  {!done && (
-                    <button
-                      onClick={() => toggleModule(mod.module_number)}
-                      className="w-7 h-7 bg-indigo-500 hover:bg-indigo-600 rounded-lg flex items-center justify-center transition-colors"
-                      aria-label="Iniciar módulo"
-                    >
-                      <Play className="w-3.5 h-3.5 text-white ml-0.5" />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className={`text-xs px-1.5 py-0.5 rounded-md font-medium bg-slate-100 text-slate-500`}>
+                      <Icon className="w-3 h-3 inline mr-0.5" />
+                      {mod.category}
+                    </span>
+                    {!done && (
+                      <button
+                        onClick={() => handleToggleModule(mod.module_number)}
+                        className="w-7 h-7 bg-indigo-500 hover:bg-indigo-600 rounded-lg flex items-center justify-center transition-colors"
+                        aria-label="Iniciar módulo"
+                      >
+                        <Play className="w-3.5 h-3.5 text-white ml-0.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }

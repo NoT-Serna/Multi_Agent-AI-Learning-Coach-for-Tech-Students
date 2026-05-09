@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getAuth } from 'firebase/auth';
 import Sidebar, { type TabId } from './components/Sidebar';
 import Header from './components/Header';
 import StatsCards from './components/StatsCards';
@@ -16,6 +17,8 @@ import AjustesPage from './pages/AjustesPage';
 import SignUpPage from './pages/SignUpPage';
 import LoginPage from './pages/LoginPage';
 import { useAgentSession } from './context/AgentSessionContext';
+import { useWeekProgress } from './hooks/useWeekProgress';
+import { useDashboardStats } from './hooks/useDashboardStats';
 import { cursosDisponibles } from './data/cursos';
 import type { SignUpResult, Usuario } from './types/auth';
 import { escucharAutenticacion, obtenerUsuario } from './services/firebase';
@@ -31,26 +34,53 @@ const titles: Record<TabId, string> = {
   ajustes: 'Ajustes',
 };
 
-function DashboardView() {
+interface DashboardViewProps {
+  createdAt: string | null;
+}
+
+function DashboardView({ createdAt }: DashboardViewProps) {
+  const { session } = useAgentSession();
+  const uid = getAuth().currentUser?.uid ?? null;
+
+  const { completedModules: completedModulesCurrentWeek } = useWeekProgress(uid, session.currentWeek);
+
+  const { streakDays, totalHoursThisWeek, averageScore, activeGoals, loading: statsLoading } =
+    useDashboardStats(uid, session, completedModulesCurrentWeek);
+
+  const completedModulesByWeek: Record<number, Set<number>> = {
+    [session.currentWeek]: completedModulesCurrentWeek,
+  };
+
   return (
     <>
       <div className="mb-6">
         <h2 className="text-xl font-bold text-slate-800">
-          ¡Buen día! Llevas 12 días de racha
+          ¡Buen día! Llevas {streakDays} días de racha
         </h2>
         <p className="text-sm text-slate-500 mt-1">
           Hoy tienes 2 sesiones programadas. Tu siguiente meta es completar el módulo de Context API.
         </p>
       </div>
 
-      <StatsCards />
+      <StatsCards
+        streakDays={streakDays}
+        totalHoursThisWeek={totalHoursThisWeek}
+        averageScore={averageScore}
+        activeGoals={activeGoals}
+        loading={statsLoading}
+      />
 
       <div className="grid grid-cols-3 gap-6 mt-6">
         <div className="col-span-2 space-y-6">
           <WeeklyPlan />
         </div>
         <div className="space-y-6">
-          <GoalsProgress />
+          <GoalsProgress
+            roadmap={session.learningRoadmap}
+            completedWeeks={session.completedWeeks}
+            completedModulesByWeek={completedModulesByWeek}
+            createdAt={createdAt}
+          />
         </div>
       </div>
 
@@ -70,6 +100,7 @@ export default function App() {
   const [tab, setTab] = useState<TabId>('dashboard');
   const [sesion, setSesion] = useState<SignUpResult | null>(null);
   const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
+  const [createdAt, setCreatedAt] = useState<string | null>(null);
   // true mientras Firebase resuelve si hay sesión persistida
   const [authChecking, setAuthChecking] = useState(true);
 
@@ -98,6 +129,12 @@ export default function App() {
                 auth: { cuenta: usuario.cuenta, contrasenaHash: '' },
                 usuario,
               });
+              // Extract createdAt from Firestore document (may be a Firestore Timestamp)
+              const rawCreatedAt = datos.createdAt;
+              const createdAtStr: string | null =
+                rawCreatedAt?.toDate?.()?.toISOString?.() ??
+                (typeof rawCreatedAt === 'string' ? rawCreatedAt : null);
+              setCreatedAt(createdAtStr);
             }
           } catch (err) {
             console.error('Error al restaurar sesión desde Firestore:', err);
@@ -228,7 +265,7 @@ export default function App() {
         <Header title={titles[tab]} />
 
         <main className="flex-1 p-6 overflow-y-auto">
-          {tab === 'dashboard' && <DashboardView />}
+          {tab === 'dashboard' && <DashboardView createdAt={createdAt} />}
           {tab === 'calendario' && <CalendarioPage />}
           {tab === 'objetivos' && <ObjetivosPage />}
           {tab === 'recursos' && <RecursosPage />}

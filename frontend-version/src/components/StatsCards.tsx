@@ -1,42 +1,47 @@
 import { Flame, Clock, Trophy, TrendingUp } from 'lucide-react';
-import { streakDays, totalHoursThisWeek, averageScore } from '../data/mockData';
 
-const stats = [
-  {
-    label: 'Racha actual',
-    value: `${streakDays} días`,
-    icon: Flame,
-    color: 'text-orange-500',
-    bg: 'bg-orange-50',
-    change: '+2 vs semana pasada',
-  },
-  {
-    label: 'Horas esta semana',
-    value: `${totalHoursThisWeek}h`,
-    icon: Clock,
-    color: 'text-blue-500',
-    bg: 'bg-blue-50',
-    change: '85% de tu meta (10h)',
-  },
-  {
-    label: 'Puntuación media',
-    value: `${averageScore}%`,
-    icon: Trophy,
-    color: 'text-yellow-500',
-    bg: 'bg-yellow-50',
-    change: '+5% vs semana pasada',
-  },
-  {
-    label: 'Objetivos activos',
-    value: '4',
-    icon: TrendingUp,
-    color: 'text-green-500',
-    bg: 'bg-green-50',
-    change: '1 próximo a completarse',
-  },
-];
+interface StatsCardsProps {
+  streakDays: number;
+  totalHoursThisWeek: number;
+  averageScore: number | null;
+  activeGoals: number;
+  loading: boolean;
+}
 
-export default function StatsCards() {
+export default function StatsCards(props: StatsCardsProps) {
+  const { streakDays, totalHoursThisWeek, averageScore, activeGoals, loading } = props;
+
+  const stats = [
+    {
+      label: 'Racha actual',
+      value: loading ? '—' : `${streakDays} días`,
+      icon: Flame,
+      color: 'text-orange-500',
+      bg: 'bg-orange-50',
+    },
+    {
+      label: 'Horas esta semana',
+      value: loading ? '—' : (totalHoursThisWeek === 0 ? '0h' : `${totalHoursThisWeek.toFixed(1)}h`),
+      icon: Clock,
+      color: 'text-blue-500',
+      bg: 'bg-blue-50',
+    },
+    {
+      label: 'Puntuación media',
+      value: loading ? '—' : (averageScore === null ? '—' : `${averageScore}%`),
+      icon: Trophy,
+      color: 'text-yellow-500',
+      bg: 'bg-yellow-50',
+    },
+    {
+      label: 'Objetivos activos',
+      value: loading ? '—' : `${activeGoals}`,
+      icon: TrendingUp,
+      color: 'text-green-500',
+      bg: 'bg-green-50',
+    },
+  ];
+
   return (
     <div className="grid grid-cols-4 gap-4">
       {stats.map((stat) => (
@@ -53,7 +58,7 @@ export default function StatsCards() {
             </div>
           </div>
           <p className="text-2xl font-bold text-slate-800">{stat.value}</p>
-          <p className="text-xs text-slate-500 mt-1">{stat.change}</p>
+          <p className="text-xs text-slate-500 mt-1"></p>
         </div>
       ))}
     </div>

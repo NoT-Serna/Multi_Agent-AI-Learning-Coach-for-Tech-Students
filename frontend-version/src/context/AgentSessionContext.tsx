@@ -29,7 +29,7 @@ import type {
 
 // ── Shape of the context value ────────────────────────────────────────────────
 
-interface AgentSession {
+export interface AgentSession {
   // Session identity
   sessionId: string | null;
   studentName: string | null;
