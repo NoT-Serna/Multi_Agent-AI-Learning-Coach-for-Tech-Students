@@ -122,6 +122,10 @@ export default function App() {
   const restoreCancelledRef = useRef(false);
   // Ref to the 5-second slow-connection timeout so we can clear it
   const slowBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref to track whether the session was set by a fresh sign-up (not a page reload).
+  // When true, the Firebase Auth observer should skip the Firestore restore flow
+  // because startSession will be triggered directly by the startSession useEffect.
+  const freshSignUpRef = useRef(false);
 
   // ── usePersistence: fire-and-forget writes to Firestore ───────────────────
   const uid = getAuth().currentUser?.uid ?? null;
@@ -134,6 +138,14 @@ export default function App() {
         // Usuario autenticado (sesión persistida o recién logueado)
         // Si ya tenemos sesion en estado, no sobreescribir
         if (!sesion) {
+          // If this auth event was triggered by a fresh sign-up (not a page reload),
+          // skip the Firestore restore flow entirely. The startSession useEffect will
+          // fire once sesion is set and hydrating is false.
+          if (freshSignUpRef.current) {
+            setAuthChecking(false);
+            return;
+          }
+
           try {
             const datos = await obtenerUsuario(firebaseUser.uid);
             if (datos) {
@@ -237,6 +249,10 @@ export default function App() {
 
   // ── Trigger startSession when Firebase auth completes ──────────────────────
   useEffect(() => {
+    // Wait until hydration is done before deciding whether to start a new session.
+    // This covers the new-account case: Firebase Auth fires escucharAutenticacion,
+    // which sets hydrating=true, reads Firestore (finds nothing for a brand-new user),
+    // then sets hydrating=false — at that point this effect re-runs and starts the session.
     if (!sesion || session.sessionId || session.loading || session.error || session.hydrating) return;
 
     const userBackground = cursosDisponibles
@@ -253,6 +269,8 @@ export default function App() {
       user_preferences: userPreferences,
       student_id:      String(sesion.usuario.id),
     });
+  // session.hydrating is intentionally included so the effect re-runs when
+  // hydration finishes (hydrating: true → false) for brand-new accounts.
   }, [sesion, session.sessionId, session.loading, session.error, session.hydrating, startSession]);
 
   // ── Esperar a que Firebase resuelva el estado de auth ─────────────────────
@@ -300,7 +318,10 @@ export default function App() {
     if (authScreen === 'signup') {
       return (
         <SignUpPage
-          onSignUp={setSesion}
+          onSignUp={(result) => {
+            freshSignUpRef.current = true;
+            setSesion(result);
+          }}
           onSwitchToLogin={() => setAuthScreen('login')}
         />
       );
