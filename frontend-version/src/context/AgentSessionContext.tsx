@@ -16,9 +16,7 @@ import {
   useCallback,
   type ReactNode,
 } from 'react';
-import { getAuth } from 'firebase/auth';
 import { agentApi } from '../services/agentApi';
-import { saveStudyCalendar } from '../services/calendarService';
 import type {
   DiagnosticQuestion,
   DiagnosticSubmitResponse,
@@ -213,14 +211,6 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         error:              null,
       }));
 
-      // Persist study calendar to Firestore (fire-and-forget)
-      const uid = getAuth().currentUser?.uid;
-      if (uid && res.study_calendar?.length > 0) {
-        saveStudyCalendar(uid, res.study_calendar, []).catch((err) => {
-          console.error('[AgentSessionContext] saveStudyCalendar (diagnostic) failed:', err);
-        });
-      }
-
       return res;
     } catch (err) {
       setError((err as Error).message);
@@ -253,14 +243,6 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         loading:         false,
         error:           null,
       }));
-
-      // Persist updated study calendar to Firestore (fire-and-forget)
-      const uid = getAuth().currentUser?.uid;
-      if (uid && res.study_calendar?.length > 0) {
-        saveStudyCalendar(uid, res.study_calendar, res.completed_weeks).catch((err) => {
-          console.error('[AgentSessionContext] saveStudyCalendar (quiz) failed:', err);
-        });
-      }
 
       return res;
     } catch (err) {

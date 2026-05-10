@@ -176,7 +176,9 @@ export function usePersistence({
   // ── Effect 3: Watch `sessionId` (Req 4.4, 4.6) ───────────────────────────
   //
   // When `sessionId` changes to a non-null, non-empty value AND `uid` is not
-  // null, persist the new sessionId via a partial update.
+  // null, persist the new sessionId via setDoc with merge (not updateDoc) so
+  // it works even before the document exists (diagnosticComplete may still be
+  // false at this point).
 
   useEffect(() => {
     // Skip initial mount
@@ -192,13 +194,16 @@ export function usePersistence({
     if (!session.sessionId) return;   // null or empty string → skip
     if (!uid) return;
 
-    actualizarEstadoSesion(uid, { sessionId: session.sessionId }).catch(
+    // Use guardarEstadoSesion (setDoc merge) instead of actualizarEstadoSesion
+    // (updateDoc) to avoid "not-found" when the document doesn't exist yet.
+    const partialEstado = serializarEstadoSesion(session, uid);
+    guardarEstadoSesion(uid, partialEstado).catch(
       (err: unknown) => {
         const message =
           err instanceof Error
             ? err.message
             : 'Error al guardar el ID de sesión.';
-        console.error('[usePersistence] actualizarEstadoSesion (sessionId) failed:', err);
+        console.error('[usePersistence] guardarEstadoSesion (sessionId) failed:', err);
         setPersistError(message);
       },
     );
