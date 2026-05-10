@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getAuth } from 'firebase/auth';
 import Sidebar, { type TabId } from './components/Sidebar';
 import Header from './components/Header';
@@ -19,9 +19,17 @@ import LoginPage from './pages/LoginPage';
 import { useAgentSession } from './context/AgentSessionContext';
 import { useWeekProgress } from './hooks/useWeekProgress';
 import { useDashboardStats } from './hooks/useDashboardStats';
+import { usePersistence } from './hooks/usePersistence';
+import ToastNotification from './components/ToastNotification';
+import SlowConnectionBanner from './components/SlowConnectionBanner';
 import { cursosDisponibles } from './data/cursos';
 import type { SignUpResult, Usuario } from './types/auth';
-import { escucharAutenticacion, obtenerUsuario } from './services/firebase';
+import { escucharAutenticacion, obtenerUsuario, cerrarSesion } from './services/firebase';
+import {
+  leerEstadoSesion,
+  deserializarEstadoSesion,
+  clasificarErrorFirestore,
+} from './services/persistenceService';
 
 type AuthScreen = 'login' | 'signup';
 
@@ -103,8 +111,21 @@ export default function App() {
   const [createdAt, setCreatedAt] = useState<string | null>(null);
   // true mientras Firebase resuelve si hay sesión persistida
   const [authChecking, setAuthChecking] = useState(true);
+  // true when the 5-second slow-connection timeout fires during restoration
+  const [showSlowBanner, setShowSlowBanner] = useState(false);
+  // Firestore read error during restoration (network / unknown)
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
-  const { session, startSession, clearError } = useAgentSession();
+  const { session, startSession, clearError, restoreSession, setHydrating } = useAgentSession();
+
+  // Ref to track whether the restore was cancelled ("Continuar sin restaurar")
+  const restoreCancelledRef = useRef(false);
+  // Ref to the 5-second slow-connection timeout so we can clear it
+  const slowBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── usePersistence: fire-and-forget writes to Firestore ───────────────────
+  const uid = getAuth().currentUser?.uid ?? null;
+  const { persistError, clearPersistError } = usePersistence({ uid, session });
 
   // ── Persistencia de sesión: escuchar Firebase Auth al arrancar ─────────────
   useEffect(() => {
@@ -135,9 +156,65 @@ export default function App() {
                 rawCreatedAt?.toDate?.()?.toISOString?.() ??
                 (typeof rawCreatedAt === 'string' ? rawCreatedAt : null);
               setCreatedAt(createdAtStr);
+
+              // ── Task 8.1: Firestore session restoration ──────────────────
+              restoreCancelledRef.current = false;
+              setHydrating(true);
+
+              // Start the 5-second slow-connection banner timer
+              slowBannerTimerRef.current = setTimeout(() => {
+                setShowSlowBanner(true);
+              }, 5000);
+
+              try {
+                const estadoSesion = await leerEstadoSesion(firebaseUser.uid);
+
+                // If the restore was cancelled by the user, do nothing
+                if (restoreCancelledRef.current) return;
+
+                // Clear the slow-connection timer
+                if (slowBannerTimerRef.current) {
+                  clearTimeout(slowBannerTimerRef.current);
+                  slowBannerTimerRef.current = null;
+                }
+                setShowSlowBanner(false);
+
+                if (estadoSesion !== null && estadoSesion.diagnosticComplete === true) {
+                  // Restore the session from Firestore
+                  restoreSession(deserializarEstadoSesion(estadoSesion));
+                  setHydrating(false);
+                } else {
+                  // No session or diagnostic not complete — let startSession useEffect handle it
+                  setHydrating(false);
+                }
+              } catch (err) {
+                if (restoreCancelledRef.current) return;
+
+                // Clear the slow-connection timer
+                if (slowBannerTimerRef.current) {
+                  clearTimeout(slowBannerTimerRef.current);
+                  slowBannerTimerRef.current = null;
+                }
+                setShowSlowBanner(false);
+
+                const classification = clasificarErrorFirestore(err);
+                if (classification === 'not-found') {
+                  // Treat as no session — let startSession handle it
+                  setHydrating(false);
+                } else {
+                  // network or unknown — show recoverable error state
+                  const message =
+                    err instanceof Error
+                      ? err.message
+                      : 'Error al restaurar la sesión desde Firestore.';
+                  setRestoreError(message);
+                  setHydrating(false);
+                }
+              }
             }
           } catch (err) {
             console.error('Error al restaurar sesión desde Firestore:', err);
+            setHydrating(false);
           }
         }
       } else {
@@ -147,14 +224,20 @@ export default function App() {
       setAuthChecking(false);
     });
 
-    return () => unsub();
+    return () => {
+      unsub();
+      // Clean up the slow-connection timer on unmount
+      if (slowBannerTimerRef.current) {
+        clearTimeout(slowBannerTimerRef.current);
+      }
+    };
     // Solo al montar — sesion intencionalmente excluida para no re-ejecutar
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Trigger startSession when Firebase auth completes ──────────────────────
   useEffect(() => {
-    if (!sesion || session.sessionId || session.loading || session.error) return;
+    if (!sesion || session.sessionId || session.loading || session.error || session.hydrating) return;
 
     const userBackground = cursosDisponibles
       .filter((c) => (sesion.usuario.idsCursos as readonly number[]).includes(c.idCurso))
@@ -170,7 +253,7 @@ export default function App() {
       user_preferences: userPreferences,
       student_id:      String(sesion.usuario.id),
     });
-  }, [sesion, session.sessionId, session.loading, session.error, startSession]);
+  }, [sesion, session.sessionId, session.loading, session.error, session.hydrating, startSession]);
 
   // ── Esperar a que Firebase resuelva el estado de auth ─────────────────────
   if (authChecking) {
@@ -180,6 +263,36 @@ export default function App() {
   // ── Rehydration / loading guard ────────────────────────────────────────────
   if (session.hydrating) {
     return <FullScreenLoader message="Restaurando tu sesión de aprendizaje…" />;
+  }
+
+  // ── Firestore restore error (network / unknown) ────────────────────────────
+  if (restoreError) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4 p-6">
+        <div className="w-full max-w-sm bg-white rounded-2xl border border-red-100 shadow-sm p-8 text-center">
+          <p className="text-sm font-medium text-red-600 mb-2">
+            No se pudo restaurar tu sesión. Puedes recargar la página o continuar sin restaurar.
+          </p>
+          <div className="flex flex-col gap-2 mt-4">
+            <button
+              onClick={() => window.location.reload()}
+              className="px-5 py-2 text-sm font-medium bg-indigo-500 text-white rounded-lg hover:bg-indigo-600"
+            >
+              Recargar
+            </button>
+            <button
+              onClick={() => {
+                setRestoreError(null);
+                // startSession useEffect will fire since session.sessionId is null
+              }}
+              className="px-5 py-2 text-sm font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200"
+            >
+              Continuar sin restaurar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // ── Auth guard ─────────────────────────────────────────────────────────────
@@ -202,7 +315,7 @@ export default function App() {
 
   // ── Agent session starting ─────────────────────────────────────────────────
   if (session.loading) {
-    return <FullScreenLoader message="Iniciando tu sesión de aprendizaje… (esto puede tardar hasta 2 minutos)" />;
+    return <FullScreenLoader message="Iniciando tu sesión de aprendizaje… (esto puede tardar hasta 5 minutos)" />;
   }
 
   // ── startSession error ─────────────────────────────────────────────────────
@@ -249,7 +362,23 @@ export default function App() {
 
   // ── Diagnostic flow ────────────────────────────────────────────────────────
   if (session.diagnosticQuestions.length > 0 && !session.diagnosticComplete) {
-    return <DiagnosticPage />;
+    return (
+      <div className="flex min-h-screen bg-slate-50">
+        <Sidebar
+          activeTab={tab}
+          onChange={setTab}
+          userName={`${sesion.usuario.nombre} ${sesion.usuario.apellido}`.trim()}
+          userEmail={sesion.usuario.cuenta}
+          onLogout={async () => {
+            await cerrarSesion();
+            setSesion(null);
+          }}
+        />
+        <div className="flex-1 flex flex-col overflow-y-auto">
+          <DiagnosticPage />
+        </div>
+      </div>
+    );
   }
 
   // ── Main dashboard ─────────────────────────────────────────────────────────
@@ -259,7 +388,36 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-slate-50">
-      <Sidebar activeTab={tab} onChange={setTab} />
+      {/* Task 8.2: Slow connection banner — shown when 5s timeout fires */}
+      <SlowConnectionBanner
+        visible={showSlowBanner}
+        onWait={() => {
+          // Hide the banner, keep waiting for the restore to complete
+          setShowSlowBanner(false);
+        }}
+        onContinueWithoutRestore={() => {
+          // Cancel the restore, hide the banner, let startSession run
+          restoreCancelledRef.current = true;
+          if (slowBannerTimerRef.current) {
+            clearTimeout(slowBannerTimerRef.current);
+            slowBannerTimerRef.current = null;
+          }
+          setShowSlowBanner(false);
+          setHydrating(false);
+          // startSession useEffect will fire because session.sessionId is still null
+        }}
+      />
+
+      <Sidebar
+        activeTab={tab}
+        onChange={setTab}
+        userName={`${sesion.usuario.nombre} ${sesion.usuario.apellido}`.trim()}
+        userEmail={sesion.usuario.cuenta}
+        onLogout={async () => {
+          await cerrarSesion();
+          setSesion(null);
+        }}
+      />
 
       <div className="flex-1 flex flex-col">
         <Header title={titles[tab]} />
@@ -275,6 +433,14 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* Task 8.2: Toast notification for Firestore write errors */}
+      <ToastNotification
+        message={persistError ?? ''}
+        type="error"
+        visible={persistError !== null}
+        onDismiss={clearPersistError}
+      />
     </div>
   );
 }

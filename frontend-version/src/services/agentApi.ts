@@ -24,10 +24,10 @@ import type {
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8006';
 
 // ── Timeouts ──────────────────────────────────────────────────────────────────
-// AI-heavy endpoints (session start, diagnostic, quiz) can take 60-120s with Ollama.
+// AI-heavy endpoints (session start, diagnostic, quiz) can take 3-5 min with Ollama.
 // Quick endpoints (health, getSession) use a short timeout.
 const DEFAULT_TIMEOUT_MS = 15_000;
-const AI_TIMEOUT_MS      = 180_000; // 3 minutes for LLM-backed endpoints
+const AI_TIMEOUT_MS      = 360_000; // 6 minutes for LLM-backed endpoints
 
 // ── Generic fetch helper ──────────────────────────────────────────────────────
 

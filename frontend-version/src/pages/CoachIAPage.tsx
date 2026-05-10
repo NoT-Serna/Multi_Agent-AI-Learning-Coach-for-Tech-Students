@@ -1,16 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
+import { getAuth } from 'firebase/auth';
 import { Send, Bot, Sparkles, Lightbulb, Calendar, Target, AlertCircle, Loader2, Lock, CheckCircle2 } from 'lucide-react';
 import { useAgentSession } from '../context/AgentSessionContext';
+import { useChatHistory } from '../context/ChatHistoryContext';
 import QuizSection from '../components/QuizSection';
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface Message {
-  id: number;
-  role: 'user' | 'coach';
-  content: string;
-  timestamp: string;
-}
+import type { MensajeChat } from '../types/persistence';
 
 // ── Suggestions ───────────────────────────────────────────────────────────────
 
@@ -22,14 +16,24 @@ const suggestions = [
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function now() {
-  return new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+/**
+ * Formats an ISO 8601 timestamp for display in the chat UI.
+ * Falls back to the raw string if parsing fails.
+ */
+function formatTimestamp(isoTimestamp: string): string {
+  const date = new Date(isoTimestamp);
+  if (isNaN(date.getTime())) return isoTimestamp;
+  return date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function CoachIAPage() {
   const { session, chat } = useAgentSession();
+  const { messages, loadingHistory, historyLoaded, cargarHistorial, agregarMensaje } = useChatHistory();
+
+  // Get the current user's UID from Firebase Auth
+  const uid = getAuth().currentUser?.uid ?? null;
 
   // Derive rendering mode
   const showDemoBanner = !session.diagnosticComplete;
@@ -49,21 +53,37 @@ export default function CoachIAPage() {
     ? 'bg-orange-400'
     : 'bg-green-500';
 
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      role: 'coach',
-      content: showChat
-        ? `¡Hola${session.studentName ? ` ${session.studentName}` : ''}! Soy tu Coach IA. Puedes preguntarme sobre tu plan de aprendizaje, tus objetivos o cualquier duda que tengas.`
-        : showDemoBanner
-        ? '¡Hola! Soy tu Coach IA. Para poder ayudarte con tu plan personalizado, primero necesitas completar el diagnóstico inicial desde el registro.'
-        : `¡Hola${session.studentName ? ` ${session.studentName}` : ''}! Has completado el diagnóstico. Aprueba el quiz de la semana para desbloquear el chat personalizado.`,
-      timestamp: now(),
-    },
-  ]);
   const [input, setInput]     = useState('');
   const [sending, setSending] = useState(false);
   const bottomRef             = useRef<HTMLDivElement>(null);
+
+  // ── Load history on mount (Req 2.2, 2.3) ───────────────────────────────────
+  useEffect(() => {
+    if (uid !== null && !historyLoaded) {
+      cargarHistorial(uid);
+    }
+  }, [uid, historyLoaded, cargarHistorial]);
+
+  // ── Add welcome message once history is loaded and chat is empty (Req 2.2) ─
+  useEffect(() => {
+    if (!historyLoaded || messages.length > 0 || uid === null) return;
+
+    const welcomeContent = showChat
+      ? `¡Hola${session.studentName ? ` ${session.studentName}` : ''}! Soy tu Coach IA. Puedes preguntarme sobre tu plan de aprendizaje, tus objetivos o cualquier duda que tengas.`
+      : showDemoBanner
+      ? '¡Hola! Soy tu Coach IA. Para poder ayudarte con tu plan personalizado, primero necesitas completar el diagnóstico inicial desde el registro.'
+      : `¡Hola${session.studentName ? ` ${session.studentName}` : ''}! Has completado el diagnóstico. Aprueba el quiz de la semana para desbloquear el chat personalizado.`;
+
+    const welcomeMsg: MensajeChat = {
+      id: String(Date.now()),
+      role: 'coach',
+      content: welcomeContent,
+      timestamp: new Date().toISOString(),
+    };
+
+    agregarMensaje(uid, welcomeMsg);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyLoaded]);
 
   // Auto-scroll to latest message
   useEffect(() => {
@@ -73,31 +93,31 @@ export default function CoachIAPage() {
   // Add congratulations message when quiz is passed
   const prevQuizPassed = useRef(session.quizPassed);
   useEffect(() => {
-    if (session.quizPassed === true && prevQuizPassed.current !== true) {
-      const congratsMsg: Message = {
-        id: Date.now(),
+    if (session.quizPassed === true && prevQuizPassed.current !== true && uid !== null) {
+      const congratsMsg: MensajeChat = {
+        id: String(Date.now()),
         role: 'coach',
         content: `🎉 ¡Felicidades${session.studentName ? ` ${session.studentName}` : ''}! Has aprobado el quiz. Ahora puedes chatear conmigo sobre tu plan de aprendizaje personalizado. ¿En qué puedo ayudarte?`,
-        timestamp: now(),
+        timestamp: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, congratsMsg]);
+      agregarMensaje(uid, congratsMsg);
     }
     prevQuizPassed.current = session.quizPassed;
-  }, [session.quizPassed, session.studentName]);
+  }, [session.quizPassed, session.studentName, uid, agregarMensaje]);
 
   // ── Send message ────────────────────────────────────────────────────────────
 
   const send = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || !historyLoaded || uid === null) return;
 
-    const userMsg: Message = {
-      id: messages.length + 1,
+    const userMsg: MensajeChat = {
+      id: String(Date.now()),
       role: 'user',
       content: trimmed,
-      timestamp: now(),
+      timestamp: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    await agregarMensaje(uid, userMsg);
     setInput('');
     setSending(true);
 
@@ -112,13 +132,13 @@ export default function CoachIAPage() {
         'Una vez que lo hagas, podré ayudarte con tu plan de aprendizaje específico.';
     }
 
-    const coachMsg: Message = {
-      id: messages.length + 2,
+    const coachMsg: MensajeChat = {
+      id: String(Date.now() + 1),
       role: 'coach',
       content: responseText,
-      timestamp: now(),
+      timestamp: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, coachMsg]);
+    await agregarMensaje(uid, coachMsg);
     setSending(false);
   };
 
@@ -188,40 +208,50 @@ export default function CoachIAPage() {
           <QuizSection />
         ) : (
           <>
-            {/* Messages */}
+            {/* Messages area — spinner while loading, list when loaded */}
             <div className="flex-1 overflow-y-auto p-5 space-y-3">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[70%] p-3 rounded-xl text-sm ${
-                      msg.role === 'user'
-                        ? 'bg-indigo-500 text-white rounded-br-sm'
-                        : 'bg-slate-100 text-slate-700 rounded-bl-sm'
-                    }`}
-                  >
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
-                    <span
-                      className={`text-xs mt-1 block ${
-                        msg.role === 'user' ? 'text-indigo-200' : 'text-slate-400'
-                      }`}
+              {loadingHistory ? (
+                /* Loading skeleton / spinner (Req 2.6) */
+                <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-sm">Cargando historial…</span>
+                </div>
+              ) : (
+                <>
+                  {messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                      {msg.timestamp}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                      <div
+                        className={`max-w-[70%] p-3 rounded-xl text-sm ${
+                          msg.role === 'user'
+                            ? 'bg-indigo-500 text-white rounded-br-sm'
+                            : 'bg-slate-100 text-slate-700 rounded-bl-sm'
+                        }`}
+                      >
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                        <span
+                          className={`text-xs mt-1 block ${
+                            msg.role === 'user' ? 'text-indigo-200' : 'text-slate-400'
+                          }`}
+                        >
+                          {formatTimestamp(msg.timestamp)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
 
-              {/* Typing indicator */}
-              {sending && (
-                <div className="flex justify-start">
-                  <div className="bg-slate-100 text-slate-500 p-3 rounded-xl rounded-bl-sm text-sm flex items-center gap-2">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>El coach está escribiendo…</span>
-                  </div>
-                </div>
+                  {/* Typing indicator */}
+                  {sending && (
+                    <div className="flex justify-start">
+                      <div className="bg-slate-100 text-slate-500 p-3 rounded-xl rounded-bl-sm text-sm flex items-center gap-2">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>El coach está escribiendo…</span>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               <div ref={bottomRef} />
@@ -234,7 +264,7 @@ export default function CoachIAPage() {
                   <button
                     key={s.label}
                     onClick={() => send(s.label)}
-                    disabled={sending}
+                    disabled={sending || !historyLoaded}
                     className="flex items-center gap-1.5 text-xs bg-slate-50 hover:bg-slate-100 disabled:opacity-50 text-slate-600 px-3 py-1.5 rounded-full border border-slate-200 transition-colors"
                   >
                     <s.icon className="w-3.5 h-3.5" />
@@ -244,20 +274,26 @@ export default function CoachIAPage() {
               </div>
             )}
 
-            {/* Input */}
+            {/* Input — disabled until history is loaded (Req 2.2, 2.6) */}
             <div className="p-4 border-t border-slate-100">
               <div className="flex gap-2">
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && send(input)}
-                  placeholder={showChat ? 'Escribe al coach...' : 'Completa el quiz para chatear…'}
-                  disabled={sending || !showChat && !showDemoBanner}
+                  placeholder={
+                    loadingHistory
+                      ? 'Cargando historial…'
+                      : showChat
+                      ? 'Escribe al coach...'
+                      : 'Completa el quiz para chatear…'
+                  }
+                  disabled={sending || loadingHistory || (!showChat && !showDemoBanner)}
                   className="flex-1 px-4 py-2.5 text-sm bg-slate-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
                 />
                 <button
                   onClick={() => send(input)}
-                  disabled={sending || !input.trim() || (!showChat && !showDemoBanner)}
+                  disabled={sending || loadingHistory || !input.trim() || (!showChat && !showDemoBanner)}
                   className="px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-lg transition-colors"
                 >
                   {sending ? (

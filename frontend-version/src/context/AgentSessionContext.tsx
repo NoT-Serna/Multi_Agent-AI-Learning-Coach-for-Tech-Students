@@ -14,10 +14,11 @@ import {
   useContext,
   useState,
   useCallback,
-  useEffect,
   type ReactNode,
 } from 'react';
+import { getAuth } from 'firebase/auth';
 import { agentApi } from '../services/agentApi';
+import { saveStudyCalendar } from '../services/calendarService';
 import type {
   DiagnosticQuestion,
   DiagnosticSubmitResponse,
@@ -83,6 +84,19 @@ interface AgentSessionContextValue {
 
   /** Clear any error message. */
   clearError(): void;
+
+  /**
+   * Restore the session from a Firestore-read EstadoSesion.
+   * Merges the partial state into the current session and clears
+   * loading/hydrating flags. Does NOT call the backend.
+   */
+  restoreSession(estado: Partial<AgentSession>): void;
+
+  /**
+   * Set the hydrating flag. Used by App.tsx + usePersistence to signal
+   * that a Firestore restore is in progress or has completed.
+   */
+  setHydrating(value: boolean): void;
 }
 
 // ── Default / empty session ───────────────────────────────────────────────────
@@ -143,30 +157,9 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     setSession((s) => ({ ...s, loading: false, error }));
 
   // ── Rehydration on mount ────────────────────────────────────────────────────
-  useEffect(() => {
-    const storedId = sessionStorage.getItem('agentSessionId');
-    if (!storedId) return;
-
-    setSession((s) => ({ ...s, hydrating: true }));
-
-    agentApi.getSession(storedId)
-      .then((state) => {
-        setSession(mapSessionStateToAgentSession(state));
-      })
-      .catch((err: Error) => {
-        // 404 means the backend session expired — clear storage
-        if (
-          err.message.includes('404') ||
-          err.message.toLowerCase().includes('not found')
-        ) {
-          sessionStorage.removeItem('agentSessionId');
-          setSession({ ...emptySession });
-        } else {
-          // Other errors: just stop hydrating, leave session empty
-          setSession((s) => ({ ...s, hydrating: false }));
-        }
-      });
-  }, []);
+  // NOTE: The sessionStorage-based rehydration that called agentApi.getSession
+  // has been removed. Rehydration is now handled by App.tsx + usePersistence
+  // using Firestore as the source of truth (see state-persistence spec).
 
   // ── startSession ────────────────────────────────────────────────────────────
   const startSession = useCallback(async (params: {
@@ -220,6 +213,14 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         error:              null,
       }));
 
+      // Persist study calendar to Firestore (fire-and-forget)
+      const uid = getAuth().currentUser?.uid;
+      if (uid && res.study_calendar?.length > 0) {
+        saveStudyCalendar(uid, res.study_calendar, []).catch((err) => {
+          console.error('[AgentSessionContext] saveStudyCalendar (diagnostic) failed:', err);
+        });
+      }
+
       return res;
     } catch (err) {
       setError((err as Error).message);
@@ -253,6 +254,14 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         error:           null,
       }));
 
+      // Persist updated study calendar to Firestore (fire-and-forget)
+      const uid = getAuth().currentUser?.uid;
+      if (uid && res.study_calendar?.length > 0) {
+        saveStudyCalendar(uid, res.study_calendar, res.completed_weeks).catch((err) => {
+          console.error('[AgentSessionContext] saveStudyCalendar (quiz) failed:', err);
+        });
+      }
+
       return res;
     } catch (err) {
       setError((err as Error).message);
@@ -279,9 +288,19 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     setSession((s) => ({ ...s, error: null }));
   }, []);
 
+  // ── restoreSession ──────────────────────────────────────────────────────────
+  const restoreSession = useCallback((estado: Partial<AgentSession>) => {
+    setSession((s) => ({ ...s, ...estado, loading: false, hydrating: false }));
+  }, []);
+
+  // ── setHydrating ────────────────────────────────────────────────────────────
+  const setHydrating = useCallback((value: boolean) => {
+    setSession((s) => ({ ...s, hydrating: value }));
+  }, []);
+
   return (
     <AgentSessionContext.Provider
-      value={{ session, startSession, submitDiagnostic, submitQuiz, chat, clearError }}
+      value={{ session, startSession, submitDiagnostic, submitQuiz, chat, clearError, restoreSession, setHydrating }}
     >
       {children}
     </AgentSessionContext.Provider>
