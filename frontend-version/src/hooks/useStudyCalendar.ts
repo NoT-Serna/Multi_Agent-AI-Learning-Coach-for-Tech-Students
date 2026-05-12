@@ -19,13 +19,19 @@ interface UseStudyCalendarResult {
  * autenticación antes de intentar leer Firestore. Esto evita el error de
  * "No se pudo cargar" cuando auth.currentUser aún es null al montar.
  *
+ * @param diagnosticComplete - Pass `true` once the diagnostic is done so the
+ *   hook knows the study_calendar subcollection exists. When `false` (default),
+ *   the Firestore listener is skipped entirely, preventing the HTTP 400 /
+ *   WebChannelConnection errors that Firestore emits when trying to listen on
+ *   a subcollection that has never been written to.
+ *
  * - Mientras Firebase resuelve auth o Firestore carga: loading=true
  * - Al recibir datos: loading=false, events=[...], error=null
  * - Si Firestore falla: loading=false, events=[], error=<Error>
  * - Si no hay usuario autenticado: loading=false, events=[], error=null
  * - retry() cancela la suscripción actual y crea una nueva
  */
-export function useStudyCalendar(): UseStudyCalendarResult {
+export function useStudyCalendar(diagnosticComplete = false): UseStudyCalendarResult {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState<boolean>(true); // true hasta que auth resuelva
   const [error, setError] = useState<Error | null>(null);
@@ -42,6 +48,17 @@ export function useStudyCalendar(): UseStudyCalendarResult {
     if (calendarUnsubRef.current) {
       calendarUnsubRef.current();
       calendarUnsubRef.current = null;
+    }
+
+    // Skip the Firestore listener entirely if the diagnostic hasn't been
+    // completed yet. The study_calendar subcollection doesn't exist for new
+    // accounts, and opening a listener on a non-existent subcollection causes
+    // HTTP 400 / WebChannelConnection errors in the browser console.
+    if (!diagnosticComplete) {
+      setEvents([]);
+      setLoading(false);
+      setError(null);
+      return;
     }
 
     setLoading(true);
@@ -72,10 +89,17 @@ export function useStudyCalendar(): UseStudyCalendarResult {
           setError(null);
         },
         (err) => {
-          // Si Firestore rechaza por permisos o la subcolección no existe aún,
-          // tratarlo como calendario vacío en lugar de mostrar error al usuario.
+          // Treat any Firestore error on this subcollection as an empty calendar
+          // rather than a hard error. Common cases for new accounts:
+          //   - 'permission-denied': security rules not yet covering the subcollection
+          //   - 'not-found': parent document or subcollection doesn't exist yet
+          //   - 'invalid-argument' (HTTP 400): Firestore rejects the Listen stream
+          //     when the subcollection has never been written to
+          // In all these cases the user simply has no calendar yet, which is expected
+          // before the diagnostic is completed.
           const code = (err as any)?.code as string | undefined;
-          if (code === 'permission-denied' || code === 'not-found') {
+          const silentCodes = ['permission-denied', 'not-found', 'invalid-argument', 'unavailable'];
+          if (!code || silentCodes.includes(code)) {
             setEvents([]);
             setLoading(false);
             setError(null);
@@ -96,7 +120,7 @@ export function useStudyCalendar(): UseStudyCalendarResult {
         calendarUnsubRef.current = null;
       }
     };
-  }, [retryCount]);
+  }, [retryCount, diagnosticComplete]);
 
   return { events, loading, error, retry };
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChevronLeft, ChevronRight, BookOpen, AlertCircle, RotateCcw, Loader2, CalendarX, Clock } from 'lucide-react';
 import type { CalendarEvent } from '../types/calendar';
 import { useStudyCalendar } from '../hooks/useStudyCalendar';
+import { useAgentSession } from '../context/AgentSessionContext';
 
 const eventTypeStyles: Record<CalendarEvent['type'], { dot: string; bg: string; icon: typeof BookOpen }> = {
   study:    { dot: 'bg-indigo-500', bg: 'bg-indigo-50 border-indigo-100 text-indigo-700',  icon: BookOpen    },
@@ -31,7 +32,8 @@ export default function CalendarWidget() {
     new Date(realToday.getFullYear(), realToday.getMonth(), 1),
   );
 
-  const { events, loading } = useStudyCalendar();
+  const { session } = useAgentSession();
+  const { events, loading } = useStudyCalendar(session.diagnosticComplete);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();

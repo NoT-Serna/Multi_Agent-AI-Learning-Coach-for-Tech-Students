@@ -19,6 +19,7 @@ import type { CalendarEvent } from '../types/calendar';
 import { useStudyCalendar } from '../hooks/useStudyCalendar';
 import { markEventCompleted } from '../services/calendarService';
 import { auth } from '../services/firebase';
+import { useAgentSession } from '../context/AgentSessionContext';
 
 const eventTypeStyles: Record<
   CalendarEvent['type'],
@@ -42,7 +43,8 @@ export default function CalendarioPage() {
   const [selectedDay, setSelectedDay] = useState(today.getDate());
   const [markError, setMarkError] = useState<string | null>(null);
 
-  const { events, loading, error, retry } = useStudyCalendar();
+  const { session } = useAgentSession();
+  const { events, loading, error, retry } = useStudyCalendar(session.diagnosticComplete);
 
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();

@@ -83,9 +83,11 @@ interface AgentSessionContextValue {
   /** Clear any error message. */
   clearError(): void;
 
+  /** Reset the entire session back to the empty state. */
+  resetSession(): void;
+
   /**
    * Restore the session from a Firestore-read EstadoSesion.
-   * Merges the partial state into the current session and clears
    * loading/hydrating flags. Does NOT call the backend.
    */
   restoreSession(estado: Partial<AgentSession>): void;
@@ -270,6 +272,12 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     setSession((s) => ({ ...s, error: null }));
   }, []);
 
+  // ── resetSession ─────────────────────────────────────────────────────────────
+  const resetSession = useCallback(() => {
+    sessionStorage.removeItem('agentSessionId');
+    setSession(emptySession);
+  }, []);
+
   // ── restoreSession ──────────────────────────────────────────────────────────
   const restoreSession = useCallback((estado: Partial<AgentSession>) => {
     setSession((s) => ({ ...s, ...estado, loading: false, hydrating: false }));
@@ -282,7 +290,7 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <AgentSessionContext.Provider
-      value={{ session, startSession, submitDiagnostic, submitQuiz, chat, clearError, restoreSession, setHydrating }}
+      value={{ session, startSession, submitDiagnostic, submitQuiz, chat, clearError, resetSession, restoreSession, setHydrating }}
     >
       {children}
     </AgentSessionContext.Provider>

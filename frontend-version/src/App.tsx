@@ -116,7 +116,7 @@ export default function App() {
   // Firestore read error during restoration (network / unknown)
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
-  const { session, startSession, clearError, restoreSession, setHydrating } = useAgentSession();
+  const { session, startSession, clearError, restoreSession, setHydrating, resetSession } = useAgentSession();
 
   // Ref to track whether the restore was cancelled ("Continuar sin restaurar")
   const restoreCancelledRef = useRef(false);
@@ -319,6 +319,9 @@ export default function App() {
       return (
         <SignUpPage
           onSignUp={(result) => {
+            // Reset any previous agent session so startSession fires cleanly
+            // for this new account (covers the "second user" case).
+            resetSession();
             freshSignUpRef.current = true;
             setSesion(result);
           }}
@@ -391,6 +394,8 @@ export default function App() {
           userName={`${sesion.usuario.nombre} ${sesion.usuario.apellido}`.trim()}
           userEmail={sesion.usuario.cuenta}
           onLogout={async () => {
+            resetSession();
+            freshSignUpRef.current = false;
             await cerrarSesion();
             setSesion(null);
           }}
@@ -435,6 +440,8 @@ export default function App() {
         userName={`${sesion.usuario.nombre} ${sesion.usuario.apellido}`.trim()}
         userEmail={sesion.usuario.cuenta}
         onLogout={async () => {
+          resetSession();
+          freshSignUpRef.current = false;
           await cerrarSesion();
           setSesion(null);
         }}
