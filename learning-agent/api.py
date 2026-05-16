@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from graph.learning_graph import app as langgraph_app
 from agents.chatbot_agent import chatbot_agent
+from agents.quiz_agent import generate_quiz as _generate_quiz_node
 
 load_dotenv()
 
@@ -205,19 +206,18 @@ def _try_restore_session(session_id: str, uid: str | None = None) -> dict | None
 
     # If a quiz is in progress, rebuild the LangGraph checkpoint so that
     # a subsequent submit_quiz call can invoke evaluate_quiz_answers.
+    # update_state(as_node="generate_quiz") positions the checkpoint as if
+    # generate_quiz just ran — the graph is already paused at the
+    # interrupt_before evaluate_quiz_answers boundary.  No invoke() needed.
     if state.get("diagnostic_complete") and state.get("quiz_questions"):
         config = _langgraph_config(session_id)
         try:
-            # Position the graph as if generate_quiz just ran.
             langgraph_app.update_state(config, state, as_node="generate_quiz")
-            # Advance to the interrupt_before point on evaluate_quiz_answers
-            # (instant — no LLM executed, graph pauses immediately).
-            langgraph_app.invoke(None, config=config)
             logger.info(f"LangGraph checkpoint rebuilt for session {session_id}")
         except Exception as exc:
             logger.warning(
                 f"Could not rebuild LangGraph checkpoint for {session_id}: {exc}. "
-                "Quiz submission may fail."
+                "Quiz submission may fall back to rebuild path."
             )
 
     logger.info(f"Session {session_id} restored from Firestore (uid={uid})")
@@ -493,16 +493,15 @@ def submit_quiz(req: QuizSubmitRequest):
         # Normal path: checkpoint is correctly positioned, inject answers and resume.
         langgraph_app.update_state(config, {"quiz_answers": req.answers})
     else:
-        # Rebuild path: position the checkpoint after generate_quiz using the stored
-        # state (which already has quiz_questions). Then advance to the interrupt point
-        # (no LLM calls) and inject the fresh answers before resuming.
+        # Rebuild path: update_state(as_node="generate_quiz") positions the checkpoint
+        # as if generate_quiz just ran — the graph is already paused at the
+        # interrupt_before evaluate_quiz_answers boundary, no invoke needed to get there.
         logger.info(
             f"[submit_quiz] Checkpoint for session {req.session_id} is not at "
             f"evaluate_quiz_answers (next={getattr(langgraph_app.get_state(config), 'next', None)}). "
             "Rebuilding checkpoint."
         )
         langgraph_app.update_state(config, state, as_node="generate_quiz")
-        langgraph_app.invoke(None, config=config)  # pauses at evaluate_quiz_answers
         langgraph_app.update_state(config, {"quiz_answers": req.answers})
 
     state = langgraph_app.invoke(None, config=config)
@@ -512,9 +511,34 @@ def submit_quiz(req: QuizSubmitRequest):
     quiz_scores  = state.get("quiz_scores", {})
     current_week = state.get("current_week", 1)
 
-    # Derive score for the week that was just evaluated
+    # Score is stored under the quiz week that was just evaluated.
+    # current_quiz_week is set by generate_quiz to the week BEFORE current_week advances.
     week_key = f"week_{state.get('current_quiz_week', current_week)}"
     score    = quiz_scores.get(week_key, 0.0)
+
+    # After passing, pre-generate quiz questions for the next week so that
+    # the frontend immediately shows fresh questions instead of repeating week N.
+    # Also repositions the checkpoint so the next submit_quiz takes the normal path.
+    quiz_questions = state.get("quiz_questions", [])
+    if next_step == "next_week" and current_week <= 4:
+        try:
+            next_quiz_state  = _generate_quiz_node(state)
+            quiz_questions   = next_quiz_state.get("quiz_questions", quiz_questions)
+            pre_state = {
+                **state,
+                "quiz_questions":    quiz_questions,
+                "quiz_answers":      [],
+                "quiz_passed":       None,
+                "next_step":         "await_quiz_answers",
+                "current_quiz_week": current_week,   # now the next week
+            }
+            _sessions[req.session_id] = pre_state
+            langgraph_app.update_state(config, pre_state, as_node="generate_quiz")
+            logger.info(f"[submit_quiz] Pre-generated week {current_week} quiz questions.")
+        except Exception as e:
+            logger.warning(
+                f"[submit_quiz] Pre-generating week {current_week} quiz failed: {e}"
+            )
 
     return QuizSubmitResponse(
         quiz_passed     = state.get("quiz_passed"),
@@ -525,7 +549,7 @@ def submit_quiz(req: QuizSubmitRequest):
         quiz_scores     = quiz_scores,
         learning_roadmap= state.get("learning_roadmap", []),
         study_calendar  = state.get("study_calendar",   []),
-        quiz_questions  = state.get("quiz_questions",   []),
+        quiz_questions  = quiz_questions,
         message         = _last_ai_message(state),
     )
 

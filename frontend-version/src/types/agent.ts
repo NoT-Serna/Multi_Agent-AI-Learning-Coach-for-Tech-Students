@@ -51,6 +51,7 @@ export interface QuizQuestion {
   options: Record<'A' | 'B' | 'C' | 'D', string>;
   correct_answer: string;
   skill_tested: string;
+  justification?: string;
 }
 
 // ── API response shapes ───────────────────────────────────────────────────────

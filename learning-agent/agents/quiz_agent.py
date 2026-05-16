@@ -68,6 +68,7 @@ Reglas:
 - Las preguntas deben cubrir los módulos de la semana actual
 - Prioriza las habilidades débiles del estudiante
 - Las preguntas deben ser claras y sin ambigüedades
+- El campo "justification" es OBLIGATORIO en cada pregunta: explica en 1-2 oraciones por qué la opción correcta es la correcta y por qué las demás no lo son
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional:
 {{
@@ -84,7 +85,8 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         "D": "opción D"
       }},
       "correct_answer": "A",
-      "skill_tested": "habilidad que evalúa"
+      "skill_tested": "habilidad que evalúa",
+      "justification": "La opción X es correcta porque... Las demás opciones son incorrectas porque..."
     }}
   ]
 }}"""),

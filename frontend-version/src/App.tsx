@@ -356,7 +356,10 @@ export default function App() {
   }
 
   // ── Agent session starting ─────────────────────────────────────────────────
-  if (session.loading) {
+  // Only block the whole UI during the initial session creation (no sessionId yet).
+  // Quiz/diagnostic submissions have their own in-component loading states, so
+  // showing this loader would unmount the page component and lose local state.
+  if (session.loading && !session.sessionId) {
     return <FullScreenLoader message="Iniciando tu sesión de aprendizaje… (esto puede tardar hasta 5 minutos)" />;
   }
 
