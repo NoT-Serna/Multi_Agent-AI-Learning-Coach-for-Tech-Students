@@ -12,12 +12,15 @@ Endpoints:
 import os
 import sys
 import uuid
+import logging
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # ── Make sure local modules are importable ────────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
@@ -26,6 +29,41 @@ from graph.learning_graph import app as langgraph_app
 from agents.chatbot_agent import chatbot_agent
 
 load_dotenv()
+
+# ── Configure logging ─────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ── Initialize Firebase Admin SDK ────────────────────────────────────────────
+db = None  # Firestore client instance
+
+try:
+    # Load service account key path from environment variable
+    service_account_path = os.getenv(
+        "FIREBASE_SERVICE_ACCOUNT_KEY",
+        os.path.join(os.path.dirname(__file__), "serviceAccountKey.json")
+    )
+    
+    if not os.path.exists(service_account_path):
+        logger.error(f"Firebase service account key not found at: {service_account_path}")
+        raise FileNotFoundError(f"Service account key file not found: {service_account_path}")
+    
+    # Initialize Firebase Admin SDK with service account credentials
+    cred = credentials.Certificate(service_account_path)
+    firebase_admin.initialize_app(cred)
+    
+    # Create Firestore client instance
+    db = firestore.client()
+    
+    logger.info("Firebase Admin SDK initialized successfully")
+    logger.info("Firestore client created successfully")
+    
+except Exception as e:
+    logger.error(f"Failed to initialize Firebase Admin SDK: {str(e)}")
+    raise HTTPException(
+        status_code=500,
+        detail=f"Firebase initialization failed: {str(e)}"
+    )
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
@@ -48,10 +86,149 @@ api.add_middleware(
 # Each value is the latest AgentState snapshot for that session.
 _sessions: dict[str, dict] = {}
 
+# Firestore collection that maps session_id → Firebase UID.
+# Written on every new session; queried when restoring after a server restart.
+_SESSION_MAP_COLLECTION = "sesiones_map"
 
-def _get_session(session_id: str) -> dict:
-    """Return session state or raise 404."""
+
+# ── Session-to-UID mapping helpers ───────────────────────────────────────────
+
+def _save_session_uid_mapping(session_id: str, uid: str) -> None:
+    """Persist session_id → uid so we can restore after a server restart."""
+    if not db or not uid:
+        return
+    try:
+        db.collection(_SESSION_MAP_COLLECTION).document(session_id).set({"uid": uid})
+    except Exception as exc:
+        logger.warning(f"Could not save session-uid mapping: {exc}")
+
+
+def _get_uid_for_session(session_id: str) -> str | None:
+    """Look up the Firebase UID that owns this session_id."""
+    if not db:
+        return None
+    try:
+        snap = db.collection(_SESSION_MAP_COLLECTION).document(session_id).get()
+        if snap.exists:
+            return snap.get("uid")
+    except Exception as exc:
+        logger.warning(f"Could not look up uid for session {session_id}: {exc}")
+    return None
+
+
+def _get_firestore_session_state(uid: str) -> dict | None:
+    """Read the user's session state document from Firestore."""
+    if not db:
+        return None
+    try:
+        snap = (
+            db.collection("usuarios")
+            .document(uid)
+            .collection("sesionAgente")
+            .document("data")
+            .get()
+        )
+        if snap.exists:
+            return snap.to_dict()
+    except Exception as exc:
+        logger.warning(f"Could not read Firestore session state for uid {uid}: {exc}")
+    return None
+
+
+def _reconstruct_agent_state(fs: dict, session_id: str) -> dict:
+    """
+    Build an AgentState-compatible dict from a Firestore EstadoSesion document.
+    Fields not stored in Firestore get safe defaults.
+    """
+    current_week = fs.get("currentWeek") or 1
+    return {
+        "student_name":         fs.get("studentName", ""),
+        "student_id":           session_id,
+        "user_background":      "",
+        "user_preferences":     "",
+        "diagnostic_questions": [],
+        "diagnostic_answers":   [],
+        "diagnostic_complete":  fs.get("diagnosticComplete", False),
+        "skill_scores":         fs.get("skillScores", {}),
+        "skills_by_category":   {},
+        "strong_skills":        fs.get("strongSkills", []),
+        "weak_skills":          fs.get("weakSkills", []),
+        "learning_roadmap":     fs.get("learningRoadmap", []),
+        "roadmap_adjusted":     False,
+        "roadmap_complete":     len(fs.get("completedWeeks", [])) >= 4,
+        "current_week":         current_week,
+        "current_quiz_week":    current_week,
+        "completed_weeks":      fs.get("completedWeeks", []),
+        "current_module":       None,
+        "completed_modules":    [],
+        "quiz_questions":       fs.get("quizQuestions", []),
+        "quiz_answers":         [],
+        "quiz_scores":          fs.get("quizScores", {}),
+        "quiz_passed":          fs.get("quizPassed"),
+        "quiz_attempts":        {},
+        "max_attempts":         3,
+        "current_step":         None,
+        "next_step":            None,
+        "error_message":        None,
+        "messages":             [],
+        "study_calendar":       [],
+        "roadmap_start_date":   None,
+    }
+
+
+def _try_restore_session(session_id: str, uid: str | None = None) -> dict | None:
+    """
+    Attempt to reconstruct a session from Firestore after a server restart.
+
+    Steps:
+      1. Use the provided uid (from the request) or fall back to sesiones_map.
+      2. Read the user's sesionAgente document from Firestore.
+      3. Rebuild an AgentState dict.
+      4. If a quiz is in progress, recreate the LangGraph checkpoint so that
+         submit_quiz can continue (fast path: hits interrupt_before immediately,
+         no LLM calls).
+      5. Store the reconstructed state in _sessions.
+    """
+    if not uid:
+        uid = _get_uid_for_session(session_id)
+    if not uid:
+        logger.info(f"No uid mapping found for session {session_id}; cannot restore.")
+        return None
+
+    fs_state = _get_firestore_session_state(uid)
+    if not fs_state:
+        logger.info(f"No Firestore state found for uid {uid}; cannot restore.")
+        return None
+
+    state = _reconstruct_agent_state(fs_state, session_id)
+    _sessions[session_id] = state
+
+    # If a quiz is in progress, rebuild the LangGraph checkpoint so that
+    # a subsequent submit_quiz call can invoke evaluate_quiz_answers.
+    if state.get("diagnostic_complete") and state.get("quiz_questions"):
+        config = _langgraph_config(session_id)
+        try:
+            # Position the graph as if generate_quiz just ran.
+            langgraph_app.update_state(config, state, as_node="generate_quiz")
+            # Advance to the interrupt_before point on evaluate_quiz_answers
+            # (instant — no LLM executed, graph pauses immediately).
+            langgraph_app.invoke(None, config=config)
+            logger.info(f"LangGraph checkpoint rebuilt for session {session_id}")
+        except Exception as exc:
+            logger.warning(
+                f"Could not rebuild LangGraph checkpoint for {session_id}: {exc}. "
+                "Quiz submission may fail."
+            )
+
+    logger.info(f"Session {session_id} restored from Firestore (uid={uid})")
+    return state
+
+
+def _get_session(session_id: str, uid: str | None = None) -> dict:
+    """Return session state, restoring from Firestore if needed, or raise 404."""
     state = _sessions.get(session_id)
+    if state is None:
+        state = _try_restore_session(session_id, uid)
     if state is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
     return state
@@ -79,6 +256,7 @@ class StartSessionResponse(BaseModel):
 class DiagnosticSubmitRequest(BaseModel):
     session_id: str
     answers: list[str]
+    user_id: str | None = None  # Firebase UID — used to restore session after a restart
 
 
 class DiagnosticSubmitResponse(BaseModel):
@@ -95,10 +273,11 @@ class DiagnosticSubmitResponse(BaseModel):
 class QuizSubmitRequest(BaseModel):
     session_id: str
     answers: list[str]
+    user_id: str | None = None  # Firebase UID — used to restore session after a restart
 
 
 class QuizSubmitResponse(BaseModel):
-    quiz_passed: bool
+    quiz_passed: bool | None
     score: float
     next_step: str
     current_week: int
@@ -113,6 +292,17 @@ class QuizSubmitResponse(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    # Optional learning context — used when the session is not in the in-memory
+    # store (e.g. after a server restart). The chatbot only needs these fields
+    # to generate a contextualised response; it does not need the full LangGraph
+    # state.
+    student_name: str | None = None
+    learning_roadmap: list[dict] | None = None
+    skill_scores: dict[str, float] | None = None
+    strong_skills: list[str] | None = None
+    weak_skills: list[str] | None = None
+    current_week: int | None = None
+    completed_weeks: list[int] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -188,8 +378,33 @@ def _last_ai_message(state: dict) -> str:
 
 @api.get("/health")
 def health():
-    """Quick liveness check."""
-    return {"status": "ok"}
+    """Quick liveness check with Firestore connection verification."""
+    try:
+        # Verify Firestore connection by attempting a simple operation
+        if db is None:
+            return {
+                "status": "degraded",
+                "api": "ok",
+                "firestore": "not_initialized"
+            }
+        
+        # Test Firestore connection with a lightweight operation
+        # This will raise an exception if Firestore is not accessible
+        _ = db.collection("_health_check").limit(1).get()
+        
+        return {
+            "status": "ok",
+            "api": "ok",
+            "firestore": "connected"
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return {
+            "status": "degraded",
+            "api": "ok",
+            "firestore": "error",
+            "error": str(e)
+        }
 
 
 @api.post("/session/start", response_model=StartSessionResponse)
@@ -206,6 +421,9 @@ def start_session(req: StartSessionRequest):
     # Run until the graph pauses at evaluate_answers (interrupt_before)
     state = langgraph_app.invoke(initial, config=config)
     _sessions[session_id] = state
+
+    # Persist session_id → student_id mapping so we can restore after a restart.
+    _save_session_uid_mapping(session_id, req.student_id or "")
 
     questions = state.get("diagnostic_questions", [])
     if not questions:
@@ -228,7 +446,7 @@ def submit_diagnostic(req: DiagnosticSubmitRequest):
     Runs: evaluate_answers → generate_roadmap → generate_quiz
     Returns skill scores, roadmap, and the first quiz.
     """
-    state  = _get_session(req.session_id)
+    state  = _get_session(req.session_id, req.user_id)
     config = _langgraph_config(req.session_id)
 
     # Inject answers and resume the graph
@@ -255,11 +473,38 @@ def submit_quiz(req: QuizSubmitRequest):
     Runs: evaluate_quiz_answers → (adjust_roadmap | END)
     Returns the result and the next state (next quiz or completion).
     """
-    state  = _get_session(req.session_id)
+    state  = _get_session(req.session_id, req.user_id)
     config = _langgraph_config(req.session_id)
 
-    # Inject answers and resume
-    langgraph_app.update_state(config, {"quiz_answers": req.answers})
+    # Verify the checkpoint is paused at the quiz interrupt. It may not be if:
+    # - The server restarted and the checkpoint rebuild in _try_restore_session failed.
+    # - A previous invoke() crashed partway through and left the graph in a bad state.
+    # If the checkpoint is missing or wrong, reposition it as if generate_quiz just ran
+    # (no LLM calls — the graph pauses immediately at interrupt_before evaluate_quiz_answers).
+    try:
+        graph_state = langgraph_app.get_state(config)
+        at_quiz_interrupt = bool(
+            graph_state.next and "evaluate_quiz_answers" in graph_state.next
+        )
+    except Exception:
+        at_quiz_interrupt = False
+
+    if at_quiz_interrupt:
+        # Normal path: checkpoint is correctly positioned, inject answers and resume.
+        langgraph_app.update_state(config, {"quiz_answers": req.answers})
+    else:
+        # Rebuild path: position the checkpoint after generate_quiz using the stored
+        # state (which already has quiz_questions). Then advance to the interrupt point
+        # (no LLM calls) and inject the fresh answers before resuming.
+        logger.info(
+            f"[submit_quiz] Checkpoint for session {req.session_id} is not at "
+            f"evaluate_quiz_answers (next={getattr(langgraph_app.get_state(config), 'next', None)}). "
+            "Rebuilding checkpoint."
+        )
+        langgraph_app.update_state(config, state, as_node="generate_quiz")
+        langgraph_app.invoke(None, config=config)  # pauses at evaluate_quiz_answers
+        langgraph_app.update_state(config, {"quiz_answers": req.answers})
+
     state = langgraph_app.invoke(None, config=config)
     _sessions[req.session_id] = state
 
@@ -272,7 +517,7 @@ def submit_quiz(req: QuizSubmitRequest):
     score    = quiz_scores.get(week_key, 0.0)
 
     return QuizSubmitResponse(
-        quiz_passed     = state.get("quiz_passed",      False),
+        quiz_passed     = state.get("quiz_passed"),
         score           = score,
         next_step       = next_step,
         current_week    = current_week,
@@ -290,8 +535,32 @@ def chat(req: ChatRequest):
     """
     Send a message to the chatbot agent.
     The chatbot uses the session's learning context to answer.
+
+    If the session is not found in the in-memory store (e.g. after a server
+    restart), the endpoint falls back to the learning context fields supplied
+    directly in the request body so the chatbot can still respond correctly.
     """
-    state = _get_session(req.session_id)
+    # Try to get the full LangGraph state; fall back to a lightweight context
+    # built from the fields the caller sent when the session is missing.
+    state = _sessions.get(req.session_id)
+
+    if state is None:
+        # Build a minimal state from the context the frontend already has.
+        # The chatbot agent only reads the fields below — it does not need the
+        # full LangGraph graph state to generate a response.
+        state = {
+            "student_name":    req.student_name or "",
+            "learning_roadmap": req.learning_roadmap or [],
+            "skill_scores":    req.skill_scores or {},
+            "strong_skills":   req.strong_skills or [],
+            "weak_skills":     req.weak_skills or [],
+            "current_week":    req.current_week,
+            "completed_weeks": req.completed_weeks or [],
+            "quiz_questions":  [],
+            "quiz_passed":     None,
+            "next_step":       None,
+            "messages":        [],
+        }
 
     # Add the user message to the state's message history
     current_messages = list(state.get("messages", []))
@@ -301,7 +570,7 @@ def chat(req: ChatRequest):
     # Invoke chatbot directly (not through the main graph)
     result = chatbot_agent(state)
 
-    # Persist updated message history
+    # Persist updated message history back into the in-memory store
     _sessions[req.session_id] = {**state, "messages": result["messages"]}
 
     return ChatResponse(response=result["messages"][-1].content)

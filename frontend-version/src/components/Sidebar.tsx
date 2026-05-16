@@ -2,6 +2,7 @@ import {
   LayoutDashboard,
   Calendar,
   Target,
+  ClipboardCheck,
   MessageSquare,
   BookOpen,
   Settings,
@@ -10,15 +11,16 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 
-export type TabId = 'dashboard' | 'calendario' | 'objetivos' | 'recursos' | 'coach' | 'ajustes';
+export type TabId = 'dashboard' | 'calendario' | 'objetivos' | 'quiz' | 'recursos' | 'coach' | 'ajustes';
 
 const navItems: { id: TabId; icon: typeof LayoutDashboard; label: string }[] = [
-  { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { id: 'calendario', icon: Calendar, label: 'Calendario' },
-  { id: 'objetivos', icon: Target, label: 'Objetivos' },
-  { id: 'recursos', icon: BookOpen, label: 'Recursos' },
-  { id: 'coach', icon: MessageSquare, label: 'Coach IA' },
-  { id: 'ajustes', icon: Settings, label: 'Ajustes' },
+  { id: 'dashboard',  icon: LayoutDashboard, label: 'Dashboard' },
+  { id: 'calendario', icon: Calendar,         label: 'Calendario' },
+  { id: 'objetivos',  icon: Target,           label: 'Objetivos' },
+  { id: 'quiz',       icon: ClipboardCheck,   label: 'Quiz Semanal' },
+  { id: 'recursos',   icon: BookOpen,         label: 'Recursos' },
+  { id: 'coach',      icon: MessageSquare,    label: 'Coach IA' },
+  { id: 'ajustes',    icon: Settings,         label: 'Ajustes' },
 ];
 
 interface Props {

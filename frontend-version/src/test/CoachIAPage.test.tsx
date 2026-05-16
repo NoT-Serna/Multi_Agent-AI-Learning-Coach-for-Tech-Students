@@ -8,7 +8,34 @@ import { render, screen } from '@testing-library/react';
 import * as fc from 'fast-check';
 import CoachIAPage from '../pages/CoachIAPage';
 import * as AgentSessionModule from '../context/AgentSessionContext';
+import { ChatHistoryProvider } from '../context/ChatHistoryContext';
 import { quizQuestionArb } from './arbitraries';
+
+// ── Mock persistenceService (used by ChatHistoryProvider) ─────────────────────
+
+vi.mock('../services/persistenceService', () => ({
+  leerHistorialChat: vi.fn().mockResolvedValue([]),
+  guardarMensaje: vi.fn().mockResolvedValue(undefined),
+  leerEstadoSesion: vi.fn(),
+  guardarEstadoSesion: vi.fn(),
+  actualizarEstadoSesion: vi.fn(),
+  deserializarEstadoSesion: vi.fn(),
+  serializarEstadoSesion: vi.fn(),
+  sanitizarEstadoSesion: vi.fn(),
+  clasificarErrorFirestore: vi.fn(),
+  withRetry: vi.fn(),
+  construirMensajeFirestore: vi.fn(),
+}));
+
+// ── Mock firebase/auth (CoachIAPage calls getAuth() directly) ─────────────────
+
+vi.mock('firebase/auth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('firebase/auth')>();
+  return {
+    ...actual,
+    getAuth: vi.fn(() => ({ currentUser: null })),
+  };
+});
 
 // ── Mock context ──────────────────────────────────────────────────────────────
 
@@ -44,7 +71,19 @@ function mockUseAgentSession(
     submitQuiz:        vi.fn(),
     chat:              vi.fn().mockResolvedValue('response'),
     clearError:        vi.fn(),
+    resetSession:      vi.fn(),
+    restoreSession:    vi.fn(),
+    setHydrating:      vi.fn(),
   });
+}
+
+/** Renders CoachIAPage wrapped in ChatHistoryProvider (required after Bug 2 fix) */
+function renderCoachIAPage() {
+  return render(
+    <ChatHistoryProvider>
+      <CoachIAPage />
+    </ChatHistoryProvider>
+  );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -59,7 +98,7 @@ describe('CoachIAPage', () => {
         fc.array(quizQuestionArb, { minLength: 1, maxLength: 3 }),
         (diagnosticComplete, quizPassed, quizQuestions) => {
           mockUseAgentSession({ diagnosticComplete, quizPassed, quizQuestions });
-          const { unmount } = render(<CoachIAPage />);
+          const { unmount } = renderCoachIAPage();
 
           const shouldShowQuiz = diagnosticComplete === true && quizPassed !== true;
 
@@ -90,7 +129,7 @@ describe('CoachIAPage', () => {
         fc.option(fc.boolean(), { nil: null }),
         (diagnosticComplete, quizPassed) => {
           mockUseAgentSession({ diagnosticComplete, quizPassed });
-          const { unmount, container } = render(<CoachIAPage />);
+          const { unmount, container } = renderCoachIAPage();
 
           const text = container.textContent ?? '';
           const hasValidLabel =
@@ -110,25 +149,25 @@ describe('CoachIAPage', () => {
   // Header status label tests
   it('shows "Modo demo" when diagnosticComplete is false', () => {
     mockUseAgentSession({ diagnosticComplete: false });
-    const { container } = render(<CoachIAPage />);
+    const { container } = renderCoachIAPage();
     expect(container.textContent).toContain('Modo demo');
   });
 
   it('shows "Quiz pendiente" when diagnosticComplete=true and quizPassed=null', () => {
     mockUseAgentSession({ diagnosticComplete: true, quizPassed: null, quizQuestions: [] });
-    const { container } = render(<CoachIAPage />);
+    const { container } = renderCoachIAPage();
     expect(container.textContent).toContain('Quiz pendiente');
   });
 
   it('shows "Chat desbloqueado" when quizPassed=true', () => {
     mockUseAgentSession({ diagnosticComplete: true, quizPassed: true });
-    const { container } = render(<CoachIAPage />);
+    const { container } = renderCoachIAPage();
     expect(container.textContent).toContain('Chat desbloqueado');
   });
 
   it('shows chat input when quizPassed=true', () => {
     mockUseAgentSession({ diagnosticComplete: true, quizPassed: true });
-    render(<CoachIAPage />);
+    renderCoachIAPage();
     expect(screen.getByPlaceholderText('Escribe al coach...')).toBeTruthy();
   });
 });

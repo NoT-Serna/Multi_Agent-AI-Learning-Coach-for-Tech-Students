@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { getAuth } from 'firebase/auth';
-import { Send, Bot, Sparkles, Lightbulb, Calendar, Target, AlertCircle, Loader2, Lock, CheckCircle2 } from 'lucide-react';
+import { Send, Bot, Sparkles, Lightbulb, Calendar, Target, AlertCircle, Loader2, Lock, ClipboardCheck } from 'lucide-react';
 import { useAgentSession } from '../context/AgentSessionContext';
 import { useChatHistory } from '../context/ChatHistoryContext';
-import QuizSection from '../components/QuizSection';
 import type { MensajeChat } from '../types/persistence';
+import type { TabId } from '../components/Sidebar';
 
 // ── Suggestions ───────────────────────────────────────────────────────────────
 
@@ -28,7 +28,11 @@ function formatTimestamp(isoTimestamp: string): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function CoachIAPage() {
+interface Props {
+  onNavigate?: (tab: TabId) => void;
+}
+
+export default function CoachIAPage({ onNavigate }: Props) {
   const { session, chat } = useAgentSession();
   const { messages, loadingHistory, historyLoaded, cargarHistorial, agregarMensaje } = useChatHistory();
 
@@ -36,20 +40,21 @@ export default function CoachIAPage() {
   const uid = getAuth().currentUser?.uid ?? null;
 
   // Derive rendering mode
+  // Chat is only blocked while the user is actively answering the quiz
   const showDemoBanner = !session.diagnosticComplete;
-  const showQuiz       = session.diagnosticComplete && session.quizPassed !== true;
-  const showChat       = session.quizPassed === true;
+  const showQuizBlocked = session.inQuizMode;
+  const showChat       = session.diagnosticComplete && !session.inQuizMode;
 
   // Header status
   const statusLabel = showDemoBanner
     ? 'Modo demo'
-    : showQuiz
-    ? 'Quiz pendiente'
-    : 'Chat desbloqueado';
+    : showQuizBlocked
+    ? 'Quiz en curso'
+    : 'Activo';
 
   const statusColor = showDemoBanner
     ? 'bg-amber-400'
-    : showQuiz
+    : showQuizBlocked
     ? 'bg-orange-400'
     : 'bg-green-500';
 
@@ -68,11 +73,9 @@ export default function CoachIAPage() {
   useEffect(() => {
     if (!historyLoaded || messages.length > 0 || uid === null) return;
 
-    const welcomeContent = showChat
-      ? `¡Hola${session.studentName ? ` ${session.studentName}` : ''}! Soy tu Coach IA. Puedes preguntarme sobre tu plan de aprendizaje, tus objetivos o cualquier duda que tengas.`
-      : showDemoBanner
+    const welcomeContent = showDemoBanner
       ? '¡Hola! Soy tu Coach IA. Para poder ayudarte con tu plan personalizado, primero necesitas completar el diagnóstico inicial desde el registro.'
-      : `¡Hola${session.studentName ? ` ${session.studentName}` : ''}! Has completado el diagnóstico. Aprueba el quiz de la semana para desbloquear el chat personalizado.`;
+      : `¡Hola${session.studentName ? ` ${session.studentName}` : ''}! Soy tu Coach IA. Puedes preguntarme sobre tu plan de aprendizaje, tus objetivos o cualquier duda que tengas.`;
 
     const welcomeMsg: MensajeChat = {
       id: String(Date.now()),
@@ -109,7 +112,7 @@ export default function CoachIAPage() {
 
   const send = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || sending || !historyLoaded || uid === null) return;
+    if (!trimmed || sending || !historyLoaded || uid === null || showQuizBlocked) return;
 
     const userMsg: MensajeChat = {
       id: String(Date.now()),
@@ -163,22 +166,12 @@ export default function CoachIAPage() {
         </div>
       )}
 
-      {/* Quiz pending banner */}
-      {showQuiz && (
+      {/* Quiz in progress banner */}
+      {showQuizBlocked && (
         <div className="flex items-center gap-3 bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-700">
           <Lock className="w-4 h-4 flex-shrink-0" />
           <span>
-            Aprueba el quiz de la semana para desbloquear el chat personalizado con el Coach IA.
-          </span>
-        </div>
-      )}
-
-      {/* Chat unlocked banner */}
-      {showChat && (
-        <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700">
-          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-          <span>
-            ¡Chat desbloqueado! Puedes preguntarme sobre tu plan de aprendizaje personalizado.
+            El chat está pausado mientras realizas el quiz. Volverá al terminar.
           </span>
         </div>
       )}
@@ -203,9 +196,28 @@ export default function CoachIAPage() {
           <Sparkles className="w-5 h-5 text-indigo-400" />
         </div>
 
-        {/* Quiz mode — replace messages area with QuizSection */}
-        {showQuiz ? (
-          <QuizSection />
+        {/* Quiz in progress — chat blocked */}
+        {showQuizBlocked ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center gap-5">
+            <div className="w-14 h-14 rounded-full bg-orange-50 flex items-center justify-center">
+              <Lock className="w-7 h-7 text-orange-400" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-700">Quiz en curso</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                El chat estará disponible al terminar el quiz de la Semana {session.currentWeek}.
+              </p>
+            </div>
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate('quiz')}
+                className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors"
+              >
+                <ClipboardCheck className="w-4 h-4" />
+                Ir al Quiz Semanal
+              </button>
+            )}
+          </div>
         ) : (
           <>
             {/* Messages area — spinner while loading, list when loaded */}
@@ -257,8 +269,8 @@ export default function CoachIAPage() {
               <div ref={bottomRef} />
             </div>
 
-            {/* Quick suggestions — only in demo or chat mode */}
-            {(showDemoBanner || showChat) && (
+            {/* Quick suggestions — hidden while quiz is active */}
+            {!showQuizBlocked && (
               <div className="px-5 pb-3 flex items-center gap-2 flex-wrap">
                 {suggestions.map((s) => (
                   <button
@@ -284,16 +296,16 @@ export default function CoachIAPage() {
                   placeholder={
                     loadingHistory
                       ? 'Cargando historial…'
-                      : showChat
-                      ? 'Escribe al coach...'
-                      : 'Completa el quiz para chatear…'
+                      : showQuizBlocked
+                      ? 'Chat pausado durante el quiz…'
+                      : 'Escribe al coach...'
                   }
-                  disabled={sending || loadingHistory || (!showChat && !showDemoBanner)}
+                  disabled={sending || loadingHistory || showQuizBlocked}
                   className="flex-1 px-4 py-2.5 text-sm bg-slate-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
                 />
                 <button
                   onClick={() => send(input)}
-                  disabled={sending || loadingHistory || !input.trim() || (!showChat && !showDemoBanner)}
+                  disabled={sending || loadingHistory || !input.trim() || showQuizBlocked}
                   className="px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-lg transition-colors"
                 >
                   {sending ? (

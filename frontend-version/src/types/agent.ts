@@ -73,7 +73,7 @@ export interface DiagnosticSubmitResponse {
 }
 
 export interface QuizSubmitResponse {
-  quiz_passed: boolean;
+  quiz_passed: boolean | null;
   score: number;
   next_step: string;
   current_week: number;

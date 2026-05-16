@@ -53,6 +53,16 @@ interface ChatHistoryContextValue {
    * memory and the error is logged (Req 3.3).
    */
   agregarMensaje(uid: string, mensaje: MensajeChat): Promise<void>;
+
+  /**
+   * Resets all chat history state to its initial empty values:
+   * `messages = []`, `historyLoaded = false`, `loadingHistory = false`.
+   *
+   * Call this during the logout flow, before `cerrarSesion()`, to prevent
+   * cross-account data leakage. After this call, the next `cargarHistorial`
+   * invocation will perform a fresh Firestore load for the new user (Req 2.4, 2.5).
+   */
+  resetChatHistory(): void;
 }
 
 // ── Context creation ──────────────────────────────────────────────────────────
@@ -128,12 +138,25 @@ export function ChatHistoryProvider({ children }: ChatHistoryProviderProps) {
     [],
   );
 
+  /**
+   * Resets all chat history state to initial empty values.
+   * Call this during logout, before cerrarSesion(), to prevent cross-account
+   * data leakage. After this call, cargarHistorial will perform a fresh
+   * Firestore load for the next user (Req 2.4, 2.5).
+   */
+  const resetChatHistory = useCallback((): void => {
+    setMessages([]);
+    setLoadingHistory(false);
+    setHistoryLoaded(false);
+  }, []);
+
   const value: ChatHistoryContextValue = {
     messages,
     loadingHistory,
     historyLoaded,
     cargarHistorial,
     agregarMensaje,
+    resetChatHistory,
   };
 
   return (

@@ -27,7 +27,7 @@ const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http:/
 // AI-heavy endpoints (session start, diagnostic, quiz) can take 3-5 min with Ollama.
 // Quick endpoints (health, getSession) use a short timeout.
 const DEFAULT_TIMEOUT_MS = 15_000;
-const AI_TIMEOUT_MS      = 360_000; // 6 minutes for LLM-backed endpoints
+const AI_TIMEOUT_MS      = 720_000; // 12 minutes for LLM-backed endpoints
 
 // ── Generic fetch helper ──────────────────────────────────────────────────────
 
@@ -105,6 +105,7 @@ export const agentApi = {
   submitDiagnostic(params: {
     session_id: string;
     answers: string[];
+    user_id?: string;
   }): Promise<DiagnosticSubmitResponse> {
     return request('POST', '/diagnostic/submit', params, AI_TIMEOUT_MS);
   },
@@ -116,6 +117,7 @@ export const agentApi = {
   submitQuiz(params: {
     session_id: string;
     answers: string[];
+    user_id?: string;
   }): Promise<QuizSubmitResponse> {
     return request('POST', '/quiz/submit', params, AI_TIMEOUT_MS);
   },
@@ -123,10 +125,19 @@ export const agentApi = {
   /**
    * Send a chat message to the Coach IA.
    * Returns the AI response.
+   * Passes the learning context so the backend can respond even after a
+   * server restart (when the in-memory session is gone).
    */
   chat(params: {
     session_id: string;
     message: string;
+    student_name?: string;
+    learning_roadmap?: unknown[];
+    skill_scores?: Record<string, number>;
+    strong_skills?: string[];
+    weak_skills?: string[];
+    current_week?: number;
+    completed_weeks?: number[];
   }): Promise<ChatResponse> {
     return request('POST', '/chat', params, AI_TIMEOUT_MS);
   },
