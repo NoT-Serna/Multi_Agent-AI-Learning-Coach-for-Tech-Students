@@ -292,6 +292,8 @@ class QuizSubmitResponse(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    # Firebase UID — required for chatbot to write calendar/roadmap changes to Firestore.
+    uid: str | None = None
     # Optional learning context — used when the session is not in the in-memory
     # store (e.g. after a server restart). The chatbot only needs these fields
     # to generate a contextualised response; it does not need the full LangGraph
@@ -307,6 +309,8 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    updated_calendar: list[dict] | None = None
+    updated_roadmap: list[dict] | None = None
 
 
 class SessionStateResponse(BaseModel):
@@ -584,7 +588,12 @@ def chat(req: ChatRequest):
             "quiz_passed":     None,
             "next_step":       None,
             "messages":        [],
+            "study_calendar":  [],
         }
+
+    # Inject the Firebase UID so the chatbot can write calendar changes to Firestore.
+    if req.uid:
+        state = {**state, "_chat_uid": req.uid}
 
     # Add the user message to the state's message history
     current_messages = list(state.get("messages", []))
@@ -594,10 +603,24 @@ def chat(req: ChatRequest):
     # Invoke chatbot directly (not through the main graph)
     result = chatbot_agent(state)
 
-    # Persist updated message history back into the in-memory store
-    _sessions[req.session_id] = {**state, "messages": result["messages"]}
+    # Extract any modification results so the frontend can update its local state.
+    updated_calendar = result.get("study_calendar") if result.get("_chat_modified_calendar") else None
+    updated_roadmap  = result.get("learning_roadmap") if result.get("_chat_modified_roadmap") else None
 
-    return ChatResponse(response=result["messages"][-1].content)
+    # Persist updated state back into the in-memory store
+    updated_state = {
+        **state,
+        "messages": result["messages"],
+        **({"study_calendar": updated_calendar} if updated_calendar is not None else {}),
+        **({"learning_roadmap": updated_roadmap} if updated_roadmap is not None else {}),
+    }
+    _sessions[req.session_id] = updated_state
+
+    return ChatResponse(
+        response=result["messages"][-1].content,
+        updated_calendar=updated_calendar,
+        updated_roadmap=updated_roadmap,
+    )
 
 
 @api.get("/session/{session_id}", response_model=SessionStateResponse)

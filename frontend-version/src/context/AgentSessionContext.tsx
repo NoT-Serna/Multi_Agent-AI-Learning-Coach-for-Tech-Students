@@ -275,19 +275,30 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
   const chat = useCallback(async (message: string): Promise<string> => {
     if (!session.sessionId) return 'No hay sesión activa. Completa el registro primero.';
     try {
+      const { auth } = await import('../services/firebase');
+      const uid = auth.currentUser?.uid;
       const res = await agentApi.chat({
-        session_id:      session.sessionId,
+        session_id:       session.sessionId,
         message,
+        uid,
         // Pass the learning context so the backend can respond even after a
         // server restart (when the in-memory session is gone).
-        student_name:    session.studentName ?? undefined,
+        student_name:     session.studentName ?? undefined,
         learning_roadmap: session.learningRoadmap,
-        skill_scores:    session.skillScores,
-        strong_skills:   session.strongSkills,
-        weak_skills:     session.weakSkills,
-        current_week:    session.currentWeek,
-        completed_weeks: session.completedWeeks,
+        skill_scores:     session.skillScores,
+        strong_skills:    session.strongSkills,
+        weak_skills:      session.weakSkills,
+        current_week:     session.currentWeek,
+        completed_weeks:  session.completedWeeks,
       });
+
+      // If the chatbot modified the roadmap, update the local session state.
+      // Calendar changes are handled by the backend writing to Firestore, which
+      // triggers the onSnapshot listener in useStudyCalendar automatically.
+      if (res.updated_roadmap && res.updated_roadmap.length > 0) {
+        setSession((s) => ({ ...s, learningRoadmap: res.updated_roadmap! }));
+      }
+
       return res.response;
     } catch (err) {
       return `Error al contactar al coach: ${(err as Error).message}`;

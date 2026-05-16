@@ -131,6 +131,7 @@ export const agentApi = {
   chat(params: {
     session_id: string;
     message: string;
+    uid?: string;
     student_name?: string;
     learning_roadmap?: unknown[];
     skill_scores?: Record<string, number>;
