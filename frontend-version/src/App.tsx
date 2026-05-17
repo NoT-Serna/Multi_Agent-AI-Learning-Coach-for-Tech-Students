@@ -286,7 +286,7 @@ export default function App() {
       student_name:     `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
       user_background:  userBackground,
       user_preferences: userPreferences,
-      student_id:       String(sesion.usuario.id),
+      student_id:       getAuth().currentUser?.uid ?? String(sesion.usuario.id),
     });
   }, [sesion, session.sessionId, session.hydrating, session.diagnosticComplete, startSession]);
 
@@ -390,10 +390,10 @@ export default function App() {
                 .map((c) => c.titulo)
                 .join(', ') || 'Sin cursos seleccionados';
               startSession({
-                student_name:    `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
-                user_background: userBackground,
+                student_name:     `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
+                user_background:  userBackground,
                 user_preferences: (sesion.usuario.intereses as readonly string[]).join(', ') || 'Sin preferencias',
-                student_id:      String(sesion.usuario.id),
+                student_id:       getAuth().currentUser?.uid ?? String(sesion.usuario.id),
               });
             }}
             className="mt-4 px-5 py-2 text-sm font-medium bg-indigo-500 text-white rounded-lg hover:bg-indigo-600"

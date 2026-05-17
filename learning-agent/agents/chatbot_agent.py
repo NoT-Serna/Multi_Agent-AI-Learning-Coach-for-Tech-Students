@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from datetime import date as _date
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
@@ -23,6 +24,48 @@ _MODIFICATION_KEYWORDS = frozenset({
     "solo de lunes", "solo entre semana", "pon", "agrega", "agrega", "remueve",
 })
 
+_WEEKDAY_ONLY_PATTERNS = (
+    "solo lunes a viernes", "lunes a viernes", "solo de lunes a viernes",
+    "sin fin de semana", "sin fines de semana", "sin sabado", "sin domingo",
+    "entre semana", "solo entre semana", "de lunes a viernes",
+    "lunes-viernes", "solo dias de semana", "dias habiles",
+)
+
+_WEEKDAY_NAMES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+
+
+# ─── Calendar helpers (pure Python — no LLM needed) ───────────────────────────────────────
+
+def _is_weekday_only_request(text: str) -> bool:
+    lower = text.lower()
+    return any(p in lower for p in _WEEKDAY_ONLY_PATTERNS)
+
+
+def _annotate_weekdays(events: list) -> list:
+    """Add a '_weekday' field to each event so the LLM doesn't have to calculate it."""
+    result = []
+    for event in events:
+        e = dict(event)
+        try:
+            d = _date.fromisoformat(e.get("date", ""))
+            e["_weekday"] = _WEEKDAY_NAMES[d.weekday()]
+        except (ValueError, TypeError):
+            pass
+        result.append(e)
+    return result
+
+
+def _filter_to_weekdays(events: list) -> list:
+    filtered = []
+    for event in events:
+        try:
+            d = _date.fromisoformat(event.get("date", ""))
+            if d.weekday() < 5:
+                filtered.append(event)
+        except (ValueError, TypeError):
+            filtered.append(event)
+    return filtered
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────────────────
 
@@ -41,6 +84,22 @@ def _get_last_human_message(state: AgentState) -> str:
     return ""
 
 
+def _summarize_roadmap(learning_roadmap: list) -> str:
+    lines = []
+    for week in learning_roadmap:
+        week_num = week.get("week", "?")
+        title    = week.get("title") or week.get("tema") or ""
+        modules  = week.get("modules") or week.get("modulos") or []
+        topic_names = []
+        for m in modules:
+            name = m.get("name") or m.get("nombre") or m.get("topic") or m.get("tema") or ""
+            if name:
+                topic_names.append(name)
+        topics_str = ", ".join(topic_names) if topic_names else "(sin detalle)"
+        lines.append(f"  Semana {week_num}: {title} — {topics_str}")
+    return "\n".join(lines)
+
+
 def _build_learning_context(state: AgentState) -> str:
     student_name     = state.get("student_name")     or "Estudiante"
     current_week     = state.get("current_week")
@@ -50,6 +109,8 @@ def _build_learning_context(state: AgentState) -> str:
     weak_skills      = state.get("weak_skills")      or []
     learning_roadmap = state.get("learning_roadmap") or []
 
+    roadmap_summary = _summarize_roadmap(learning_roadmap)
+
     return (
         "[CONTEXTO DE APRENDIZAJE]\n"
         f"Nombre del estudiante: {student_name}\n"
@@ -58,8 +119,8 @@ def _build_learning_context(state: AgentState) -> str:
         f"Puntajes por habilidad: {skill_scores}\n"
         f"Habilidades fuertes: {strong_skills}\n"
         f"Habilidades a reforzar: {weak_skills}\n"
-        f"Roadmap de aprendizaje:\n"
-        f"{json.dumps(learning_roadmap, ensure_ascii=False, indent=2)}\n"
+        f"Roadmap de aprendizaje (resumen):\n"
+        f"{roadmap_summary}\n"
         "[FIN DEL CONTEXTO]"
     )
 
@@ -162,31 +223,55 @@ def _handle_calendar_modification(state: AgentState, question: str) -> AgentStat
         ))
         return {**state, "messages": [msg]}
 
+    # ─ Handle weekday-only filter in Python (the LLM is unreliable for date arithmetic) ─
+    if _is_weekday_only_request(question):
+        modified_events = _filter_to_weekdays(current_calendar)
+        removed = len(current_calendar) - len(modified_events)
+        if uid:
+            try:
+                _write_calendar_to_firestore(uid, modified_events)
+            except Exception as exc:
+                logger.error("Failed to write modified calendar to Firestore: %s", exc)
+        msg = AIMessage(content=(
+            f"Listo, {student_name}. Se eliminaron {removed} actividades de fin de semana. "
+            f"Tu calendario ahora tiene {len(modified_events)} eventos solo de lunes a viernes.\n\n"
+            "Los cambios ya estan reflejados en tu seccion de Calendario."
+        ))
+        return {
+            **state,
+            "messages":                [msg],
+            "study_calendar":          modified_events,
+            "_chat_modified_calendar": True,
+        }
+
+    # ─ Other modifications: annotate weekdays so the LLM doesn't have to calculate them ─
     try:
+        annotated_calendar = _annotate_weekdays(current_calendar)
         response = llm_json.invoke([
             SystemMessage(content=(
                 "Eres un asistente que modifica calendarios de estudio en JSON.\n"
-                "Aplica EXACTAMENTE lo que el usuario pide. Conserva todos los campos de cada evento.\n\n"
-                "Reglas comunes:\n"
-                "- solo lunes a viernes / sin fin de semana: eliminar eventos cuya fecha caiga en sabado o domingo.\n"
-                "  Para detectar el dia de semana de una fecha ISO YYYY-MM-DD usa la formula del dia juliano.\n"
-                "  sabado = weekday 5 (python datetime), domingo = weekday 6\n"
-                "- cambiar hora: modificar el campo time (formato HH:MM)\n"
-                "- eliminar semana X: eliminar eventos con week igual a X\n\n"
-                "Responde UNICAMENTE con JSON valido:\n"
-                '{"events": [...lista completa de eventos modificados...], "summary": "descripcion breve del cambio"}'
+                "Aplica EXACTAMENTE lo que el usuario pide. Conserva todos los campos originales de cada evento "
+                "(ignora el campo '_weekday', es solo informativo).\n\n"
+                "Reglas:\n"
+                "- cambiar hora: modifica el campo 'time' (formato HH:MM)\n"
+                "- eliminar semana X: elimina eventos cuyo campo 'week' sea igual a X\n"
+                "- El campo '_weekday' ya indica el dia de la semana de cada evento, usalo si lo necesitas\n\n"
+                "Responde UNICAMENTE con JSON valido, sin texto adicional:\n"
+                '{"events": [...lista completa de eventos modificados sin el campo _weekday...]}'
             )),
             HumanMessage(content=(
                 f"Estudiante: {student_name}\n"
                 f"Solicitud: {question}\n\n"
-                f"Calendario actual (JSON):\n{json.dumps(current_calendar, ensure_ascii=False)}\n\n"
-                "Aplica la modificacion y devuelve el calendario completo modificado."
+                f"Calendario actual:\n{json.dumps(annotated_calendar, ensure_ascii=False)}\n\n"
+                "Devuelve el calendario completo con la modificacion aplicada."
             )),
         ])
 
         data            = _parse_json(response.content)
         modified_events = data.get("events", current_calendar)
-        summary         = data.get("summary", "Tu calendario ha sido actualizado.")
+
+        # Strip any _weekday annotation the LLM may have left
+        modified_events = [{k: v for k, v in e.items() if k != "_weekday"} for e in modified_events]
 
         if uid:
             try:
@@ -195,8 +280,8 @@ def _handle_calendar_modification(state: AgentState, question: str) -> AgentStat
                 logger.error("Failed to write modified calendar to Firestore: %s", exc)
 
         msg = AIMessage(content=(
-            f"{summary}\n\n"
-            "Los cambios ya estan reflejados en tu seccion de Calendario."
+            f"Listo, {student_name}. Tu calendario ha sido actualizado. "
+            "Puedes verlo en la seccion de Calendario."
         ))
         return {
             **state,
@@ -231,7 +316,7 @@ def _handle_roadmap_modification(state: AgentState, question: str) -> AgentState
                 "Eres un asistente que modifica planes de estudio en JSON.\n"
                 "Aplica exactamente lo que el usuario pide. Conserva la estructura de semanas y modulos.\n\n"
                 "Responde UNICAMENTE con JSON valido:\n"
-                '{"roadmap": [...semanas modificadas...], "summary": "descripcion breve del cambio"}'
+                '{"roadmap": [...semanas modificadas...]}'
             )),
             HumanMessage(content=(
                 f"Estudiante: {student_name}\n"
@@ -243,11 +328,10 @@ def _handle_roadmap_modification(state: AgentState, question: str) -> AgentState
 
         data             = _parse_json(response.content)
         modified_roadmap = data.get("roadmap", learning_roadmap)
-        summary          = data.get("summary", "Tu plan de estudio ha sido actualizado.")
 
         msg = AIMessage(content=(
-            f"{summary}\n\n"
-            "Los cambios se han aplicado a tu plan de estudio."
+            f"Listo, {student_name}. Tu plan de estudio ha sido actualizado. "
+            "Puedes verlo en la seccion de Roadmap."
         ))
         return {
             **state,

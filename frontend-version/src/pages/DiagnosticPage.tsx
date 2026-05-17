@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Sparkles, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Sparkles, Loader2, AlertCircle, RefreshCw, BookOpen } from 'lucide-react';
 import { useAgentSession } from '../context/AgentSessionContext';
 
 type Option = 'A' | 'B' | 'C' | 'D';
@@ -33,6 +33,30 @@ export default function DiagnosticPage() {
   };
 
   const isLoading = submitting || session.loading;
+
+  // Once submitted, show a dedicated loading screen instead of disabled questions
+  if (submitting) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="flex flex-col items-center gap-6 text-center max-w-sm">
+          <div className="w-20 h-20 rounded-full bg-indigo-50 flex items-center justify-center">
+            <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">Creando tu plan personalizado</h2>
+            <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+              Estamos analizando tus respuestas y generando tu roadmap de aprendizaje con el agente de IA.
+            </p>
+            <p className="text-xs text-slate-400 mt-3">Esto puede tardar varios minutos…</p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-indigo-400 bg-indigo-50 rounded-lg px-4 py-2">
+            <BookOpen className="w-4 h-4 flex-shrink-0" />
+            <span>Evaluando respuestas · Generando roadmap · Creando calendario</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-start justify-center p-6">
