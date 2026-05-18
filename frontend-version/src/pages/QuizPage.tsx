@@ -121,17 +121,9 @@ export default function QuizPage({ onNavigate }: Props) {
         submittedAnswers: snapshotAnswers,
         submittedQuestions: snapshotQuestions,
       });
-      if (passed || res.next_step === 'adjust_roadmap') {
-        setInQuizMode(false);
-      }
+      setInQuizMode(false);
     }
     setSubmitting(false);
-  };
-
-  const handleRetry = () => {
-    setAnswers({});
-    setResult(null);
-    clearError();
   };
 
   // ── No diagnostic yet ──────────────────────────────────────────────────────
@@ -294,13 +286,15 @@ export default function QuizPage({ onNavigate }: Props) {
               </button>
             )
           ) : (
-            <button
-              onClick={handleRetry}
-              className="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-medium bg-indigo-500 text-white rounded-xl hover:bg-indigo-600 transition-colors"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Reintentar quiz
-            </button>
+            onNavigate && (
+              <button
+                onClick={() => onNavigate('dashboard')}
+                className="flex-1 flex items-center justify-center gap-2 px-5 py-3 text-sm font-medium bg-indigo-500 text-white rounded-xl hover:bg-indigo-600 transition-colors"
+              >
+                <ArrowRight className="w-4 h-4" />
+                Volver al Dashboard
+              </button>
+            )
           )}
         </div>
       </div>

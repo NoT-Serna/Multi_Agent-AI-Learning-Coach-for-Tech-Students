@@ -246,9 +246,12 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
       // for the next week and resets quiz_passed to null in the state snapshot.
       const actuallyPassed =
         res.next_step === 'next_week' || res.next_step === 'completed';
+      // On retry the backend returns quiz_passed=null and clears the failed score
+      // so the next attempt starts completely fresh.
+      const isRetry = res.next_step === 'retry_quiz';
       setSession((s) => ({
         ...s,
-        quizPassed:      actuallyPassed ? true : (res.quiz_passed ?? false),
+        quizPassed:      isRetry ? null : actuallyPassed ? true : (res.quiz_passed ?? false),
         quizScores:      res.quiz_scores,
         currentWeek:     res.current_week,
         completedWeeks:  res.completed_weeks,
