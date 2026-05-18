@@ -31,6 +31,8 @@ export interface AgentSession {
   // Session identity
   sessionId: string | null;
   studentName: string | null;
+  userPreferences: string | null;
+  userBackground: string | null;
 
   // Diagnostic
   diagnosticQuestions: DiagnosticQuestion[];
@@ -108,6 +110,8 @@ interface AgentSessionContextValue {
 const emptySession: AgentSession = {
   sessionId:            null,
   studentName:          null,
+  userPreferences:      null,
+  userBackground:       null,
   diagnosticQuestions:  [],
   diagnosticComplete:   false,
   skillScores:          {},
@@ -159,6 +163,8 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         ...s,
         sessionId:           res.session_id,
         studentName:         params.student_name,
+        userPreferences:     params.user_preferences,
+        userBackground:      params.user_background,
         diagnosticQuestions: res.diagnostic_questions,
         loading:             false,
         error:               null,
@@ -284,12 +290,15 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         // Pass the learning context so the backend can respond even after a
         // server restart (when the in-memory session is gone).
         student_name:     session.studentName ?? undefined,
+        user_preferences: session.userPreferences ?? undefined,
+        user_background:  session.userBackground ?? undefined,
         learning_roadmap: session.learningRoadmap,
         skill_scores:     session.skillScores,
         strong_skills:    session.strongSkills,
         weak_skills:      session.weakSkills,
         current_week:     session.currentWeek,
         completed_weeks:  session.completedWeeks,
+        quiz_scores:      session.quizScores,
       });
 
       // If the chatbot modified the roadmap, update the local session state.
@@ -303,7 +312,7 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       return `Error al contactar al coach: ${(err as Error).message}`;
     }
-  }, [session.sessionId, session.studentName, session.learningRoadmap, session.skillScores, session.strongSkills, session.weakSkills, session.currentWeek, session.completedWeeks]);
+  }, [session.sessionId, session.studentName, session.userPreferences, session.userBackground, session.learningRoadmap, session.skillScores, session.strongSkills, session.weakSkills, session.currentWeek, session.completedWeeks, session.quizScores]);
 
   // ── clearError ──────────────────────────────────────────────────────────────
   const clearError = useCallback(() => {

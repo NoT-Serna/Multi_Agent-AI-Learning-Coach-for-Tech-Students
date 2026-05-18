@@ -84,7 +84,7 @@ def _get_last_human_message(state: AgentState) -> str:
     return ""
 
 
-def _summarize_roadmap(learning_roadmap: list) -> str:
+def _summarize_roadmap(learning_roadmap: list, completed_weeks: list, current_week: int | None) -> str:
     lines = []
     for week in learning_roadmap:
         week_num = week.get("week", "?")
@@ -96,30 +96,103 @@ def _summarize_roadmap(learning_roadmap: list) -> str:
             if name:
                 topic_names.append(name)
         topics_str = ", ".join(topic_names) if topic_names else "(sin detalle)"
-        lines.append(f"  Semana {week_num}: {title} — {topics_str}")
+        if week_num in completed_weeks:
+            status = "[COMPLETADA]"
+        elif week_num == current_week:
+            status = "[EN CURSO]"
+        else:
+            status = "[PENDIENTE]"
+        lines.append(f"  Semana {week_num} {status}: {title} — {topics_str}")
+    return "\n".join(lines)
+
+
+def _summarize_current_week_tasks(study_calendar: list, current_week: int | None) -> str:
+    if not study_calendar or current_week is None:
+        return "  (sin tareas registradas para esta semana)"
+    week_events = [e for e in study_calendar if e.get("week") == current_week]
+    if not week_events:
+        return "  (sin tareas registradas para esta semana)"
+    completed = [e for e in week_events if e.get("completed")]
+    pending   = [e for e in week_events if not e.get("completed")]
+
+    lines = [f"  Total: {len(week_events)} tareas — {len(completed)} completadas, {len(pending)} pendientes"]
+    if pending:
+        lines.append("  Pendientes:")
+        for e in pending[:5]:
+            date  = e.get("date", "?")
+            title = e.get("title", "Tarea")
+            lines.append(f"    - [{date}] {title}")
+        if len(pending) > 5:
+            lines.append(f"    ... y {len(pending) - 5} más")
+    if completed:
+        lines.append(f"  Completadas: {', '.join(e.get('title', 'Tarea') for e in completed[:5])}")
+    return "\n".join(lines)
+
+
+def _summarize_quiz_history(quiz_scores: dict) -> str:
+    if not quiz_scores:
+        return "  (sin quizzes realizados)"
+    lines = []
+    for week_key in sorted(quiz_scores):
+        score = quiz_scores[week_key]
+        week_label = week_key.replace("week_", "Semana ").replace("_", " ")
+        result = "Aprobado" if score >= 70 else "Reprobado"
+        lines.append(f"  {week_label}: {score:.1f}% — {result}")
     return "\n".join(lines)
 
 
 def _build_learning_context(state: AgentState) -> str:
-    student_name     = state.get("student_name")     or "Estudiante"
-    current_week     = state.get("current_week")
-    completed_weeks  = state.get("completed_weeks")  or []
-    skill_scores     = state.get("skill_scores")     or {}
-    strong_skills    = state.get("strong_skills")    or []
-    weak_skills      = state.get("weak_skills")      or []
-    learning_roadmap = state.get("learning_roadmap") or []
+    student_name      = state.get("student_name")      or "Estudiante"
+    user_preferences  = state.get("user_preferences")  or ""
+    user_background   = state.get("user_background")   or ""
+    current_week      = state.get("current_week")
+    completed_weeks   = state.get("completed_weeks")   or []
+    skill_scores      = state.get("skill_scores")      or {}
+    strong_skills     = state.get("strong_skills")     or []
+    weak_skills       = state.get("weak_skills")       or []
+    learning_roadmap  = state.get("learning_roadmap")  or []
+    study_calendar    = state.get("study_calendar")    or []
+    quiz_scores       = state.get("quiz_scores")       or {}
 
-    roadmap_summary = _summarize_roadmap(learning_roadmap)
+    total_weeks     = len(learning_roadmap)
+    remaining_weeks = [w.get("week") for w in learning_roadmap if w.get("week") not in completed_weeks and w.get("week") != current_week]
+    overall_pct     = int(len(completed_weeks) / total_weeks * 100) if total_weeks else 0
+
+    roadmap_summary     = _summarize_roadmap(learning_roadmap, completed_weeks, current_week)
+    week_tasks_summary  = _summarize_current_week_tasks(study_calendar, current_week)
+    quiz_history        = _summarize_quiz_history(quiz_scores)
+
+    profile_lines = []
+    if user_background:
+        profile_lines.append(f"Conocimientos previos: {user_background}")
+    if user_preferences:
+        profile_lines.append(f"Objetivos y preferencias: {user_preferences}")
+    profile_section = "\n".join(profile_lines) if profile_lines else "  (sin datos de perfil)"
+
+    skill_lines = []
+    for skill, score in skill_scores.items():
+        skill_lines.append(f"  {skill}: {score:.1f}%")
+    skills_section = "\n".join(skill_lines) if skill_lines else "  (sin puntajes)"
 
     return (
         "[CONTEXTO DE APRENDIZAJE]\n"
-        f"Nombre del estudiante: {student_name}\n"
-        f"Semana actual: {current_week}\n"
+        f"Nombre del estudiante: {student_name}\n\n"
+        f"--- Perfil del estudiante ---\n"
+        f"{profile_section}\n\n"
+        f"--- Progreso general ---\n"
+        f"Semana actual: {current_week} de {total_weeks}\n"
         f"Semanas completadas: {completed_weeks}\n"
-        f"Puntajes por habilidad: {skill_scores}\n"
+        f"Semanas pendientes: {remaining_weeks}\n"
+        f"Avance total: {overall_pct}%\n\n"
+        f"--- Habilidades evaluadas ---\n"
+        f"{skills_section}\n"
         f"Habilidades fuertes: {strong_skills}\n"
-        f"Habilidades a reforzar: {weak_skills}\n"
-        f"Roadmap de aprendizaje (resumen):\n"
+        f"Habilidades a reforzar: {weak_skills}\n\n"
+        f"--- Tareas de la semana actual (Semana {current_week}) ---\n"
+        f"{week_tasks_summary}\n\n"
+        f"--- Historial de quizzes ---\n"
+        f"{quiz_history}\n\n"
+        f"--- Plan de aprendizaje completo ---\n"
         f"{roadmap_summary}\n"
         "[FIN DEL CONTEXTO]"
     )
@@ -389,29 +462,33 @@ def chatbot_agent(state: AgentState) -> AgentState:
 
     # ─ Detect modification intent ────────────────────────────────────────────────────
     if _might_be_modification(question):
+        # Short-circuit LLM classification for weekday-only patterns — pure Python is
+        # more reliable than asking a small LLM to return JSON for a well-known request.
+        if _is_weekday_only_request(question):
+            return _handle_calendar_modification(state, question)
         intent = _classify_modification_intent(question)
         if intent == "modify_calendar":
             return _handle_calendar_modification(state, question)
         if intent == "modify_roadmap":
             return _handle_roadmap_modification(state, question)
 
-    # ─ Normal Q&A response ──────────────────────────────────────────────────────────
-    student_name = state.get("student_name") or "Estudiante"
-    context      = _build_learning_context(state)
+    # ─ Ensure calendar is loaded for context (fallback to Firestore) ─────────────────
+    uid = state.get("_chat_uid") or state.get("student_id") or ""
+    if not state.get("study_calendar") and uid:
+        calendar = _read_calendar_from_firestore(uid)
+        if calendar:
+            state = {**state, "study_calendar": calendar}
 
+    # ─ Normal Q&A response ──────────────────────────────────────────────────────────
+    context = _build_learning_context(state)
+
+    # Prompt designed for small LLMs: short instructions, data first, question last.
     system_prompt = (
-        f"Eres un mentor de aprendizaje personalizado para {student_name}. "
-        "Tu rol es ayudar al estudiante a entender y avanzar en su ruta de aprendizaje "
-        "de programacion y tecnologia.\n\n"
-        "Instrucciones:\n"
-        "- Responde SIEMPRE en el mismo idioma en que el estudiante formulo su pregunta.\n"
-        "- Usa un tono motivador y de apoyo.\n"
-        "- Limita tu respuesta a un maximo de 400 palabras.\n"
-        "- Basa tus respuestas exclusivamente en la informacion del contexto de aprendizaje.\n"
-        "- Si la pregunta no esta relacionada con programacion o el plan de aprendizaje, "
-        "indicale amablemente que solo puedes responder sobre su ruta de estudio.\n"
-        "- Incluye el nombre del estudiante en tu respuesta.\n"
-        "- Puedes ayudar a modificar el calendario o el roadmap si el usuario lo solicita.\n\n"
+        "Eres un asistente de aprendizaje. "
+        "Responde la pregunta del estudiante usando UNICAMENTE los datos proporcionados abajo. "
+        "Si los datos no contienen la respuesta, di que no tienes esa informacion. "
+        "Responde en el mismo idioma de la pregunta. Maximo 300 palabras. "
+        "Tono motivador. Menciona el nombre del estudiante.\n\n"
         f"{context}"
     )
 

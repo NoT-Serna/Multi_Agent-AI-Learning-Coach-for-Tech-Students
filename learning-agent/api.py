@@ -299,12 +299,16 @@ class ChatRequest(BaseModel):
     # to generate a contextualised response; it does not need the full LangGraph
     # state.
     student_name: str | None = None
+    user_preferences: str | None = None
+    user_background: str | None = None
     learning_roadmap: list[dict] | None = None
     skill_scores: dict[str, float] | None = None
     strong_skills: list[str] | None = None
     weak_skills: list[str] | None = None
     current_week: int | None = None
     completed_weeks: list[int] | None = None
+    quiz_scores: dict[str, float] | None = None
+    study_calendar: list[dict] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -577,18 +581,21 @@ def chat(req: ChatRequest):
         # The chatbot agent only reads the fields below — it does not need the
         # full LangGraph graph state to generate a response.
         state = {
-            "student_name":    req.student_name or "",
+            "student_name":     req.student_name or "",
+            "user_preferences": req.user_preferences or "",
+            "user_background":  req.user_background or "",
             "learning_roadmap": req.learning_roadmap or [],
-            "skill_scores":    req.skill_scores or {},
-            "strong_skills":   req.strong_skills or [],
-            "weak_skills":     req.weak_skills or [],
-            "current_week":    req.current_week,
-            "completed_weeks": req.completed_weeks or [],
-            "quiz_questions":  [],
-            "quiz_passed":     None,
-            "next_step":       None,
-            "messages":        [],
-            "study_calendar":  [],
+            "skill_scores":     req.skill_scores or {},
+            "strong_skills":    req.strong_skills or [],
+            "weak_skills":      req.weak_skills or [],
+            "current_week":     req.current_week,
+            "completed_weeks":  req.completed_weeks or [],
+            "quiz_scores":      req.quiz_scores or {},
+            "study_calendar":   req.study_calendar or [],
+            "quiz_questions":   [],
+            "quiz_passed":      None,
+            "next_step":        None,
+            "messages":         [],
         }
 
     # Inject the Firebase UID so the chatbot can write calendar changes to Firestore.
