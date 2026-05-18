@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { getAuth } from 'firebase/auth';
 import {
   Lock, CheckCircle2, Circle, Trophy, XCircle,
-  ClipboardCheck, RefreshCw, Loader2, AlertCircle, ArrowRight, BookOpen, Play,
+  ClipboardCheck, RefreshCw, Loader2, AlertCircle, ArrowRight, Play,
   CheckCircle, XCircle as XCircleSmall,
 } from 'lucide-react';
 import { useAgentSession } from '../context/AgentSessionContext';
 import { useWeekProgress } from '../hooks/useWeekProgress';
+import { agentApi } from '../services/agentApi';
 import type { QuizQuestion } from '../types/agent';
 import type { TabId } from '../components/Sidebar';
 
@@ -27,7 +28,7 @@ interface Props {
 }
 
 export default function QuizPage({ onNavigate }: Props) {
-  const { session, submitQuiz, clearError, setInQuizMode } = useAgentSession();
+  const { session, submitQuiz, clearError, setInQuizMode, restoreSession } = useAgentSession();
   const uid = getAuth().currentUser?.uid ?? null;
 
   const hasRoadmap = session.diagnosticComplete && session.learningRoadmap.length > 0;
@@ -49,10 +50,48 @@ export default function QuizPage({ onNavigate }: Props) {
   const [answers, setAnswers] = useState<Record<string, Option>>({});
   const [result, setResult] = useState<QuizResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
 
   const answeredCount = Object.keys(answers).length;
   const allAnswered = answeredCount === questions.length && questions.length > 0;
   const isLoading = submitting || session.loading;
+
+  // When all modules are done but quiz questions are missing in session (e.g. after
+  // restoring from an old Firestore document that lacked the field), try to recover
+  // them from the backend before showing the start screen.
+  useEffect(() => {
+    if (
+      progressLoading ||
+      !allModulesDone ||
+      questions.length > 0 ||
+      !session.sessionId ||
+      session.hydrating ||
+      recovering ||
+      recoveryFailed
+    ) return;
+
+    let cancelled = false;
+    setRecovering(true);
+
+    agentApi.getSession(session.sessionId)
+      .then((state) => {
+        if (cancelled) return;
+        if (state.quiz_questions && state.quiz_questions.length > 0) {
+          restoreSession({ quizQuestions: state.quiz_questions });
+        } else {
+          setRecoveryFailed(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRecoveryFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setRecovering(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [progressLoading, allModulesDone, questions.length, session.sessionId, session.hydrating, recovering, recoveryFailed, restoreSession]);
 
   const handleStartQuiz = () => {
     setQuizStarted(true);
@@ -361,6 +400,47 @@ export default function QuizPage({ onNavigate }: Props) {
 
   // ── All modules done but quiz not started yet ──────────────────────────────
   if (!quizStarted) {
+    // Still fetching questions from backend
+    if (recovering) {
+      return (
+        <div className="space-y-6">
+          <PageHeader week={session.currentWeek} focus={currentWeekData?.focus ?? null} />
+          <div className="bg-white rounded-xl border border-slate-200 p-12 flex flex-col items-center gap-3">
+            <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
+            <p className="text-sm text-slate-500">Cargando preguntas del quiz…</p>
+          </div>
+        </div>
+      );
+    }
+
+    // Backend couldn't provide questions
+    if (recoveryFailed) {
+      return (
+        <div className="space-y-6">
+          <PageHeader week={session.currentWeek} focus={currentWeekData?.focus ?? null} />
+          <div className="bg-white rounded-xl border border-slate-200 p-10 flex flex-col items-center text-center gap-4">
+            <div className="w-14 h-14 rounded-full bg-red-50 flex items-center justify-center">
+              <AlertCircle className="w-7 h-7 text-red-400" />
+            </div>
+            <div>
+              <p className="font-semibold text-slate-700">No se pudieron cargar las preguntas</p>
+              <p className="text-sm text-slate-500 mt-1">
+                El backend no tiene las preguntas del quiz en memoria. Asegúrate de que el servidor
+                esté activo y recarga la página.
+              </p>
+            </div>
+            <button
+              onClick={() => window.location.reload()}
+              className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium bg-indigo-500 text-white rounded-xl hover:bg-indigo-600 transition-colors"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Recargar página
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-6">
         <PageHeader week={session.currentWeek} focus={currentWeekData?.focus ?? null} />
@@ -409,14 +489,23 @@ export default function QuizPage({ onNavigate }: Props) {
     );
   }
 
-  // ── No questions loaded yet ────────────────────────────────────────────────
+  // ── Quiz started but questions disappeared (shouldn't normally happen) ─────
   if (questions.length === 0) {
     return (
       <div className="space-y-6">
         <PageHeader week={session.currentWeek} focus={currentWeekData?.focus ?? null} />
-        <div className="bg-white rounded-xl border border-slate-200 p-12 flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
-          <p className="text-sm text-slate-500">Cargando preguntas del quiz…</p>
+        <div className="bg-white rounded-xl border border-slate-200 p-10 flex flex-col items-center text-center gap-4">
+          <AlertCircle className="w-8 h-8 text-red-400" />
+          <p className="text-sm text-slate-500">
+            Las preguntas no están disponibles. Recarga la página e inténtalo de nuevo.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium bg-indigo-500 text-white rounded-xl hover:bg-indigo-600 transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Recargar página
+          </button>
         </div>
       </div>
     );

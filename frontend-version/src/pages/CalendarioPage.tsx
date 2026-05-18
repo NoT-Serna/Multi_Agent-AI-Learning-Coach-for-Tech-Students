@@ -226,7 +226,9 @@ export default function CalendarioPage() {
                         className={`text-[10px] truncate px-1 py-0.5 rounded ${
                           isSelected
                             ? 'bg-white/20 text-white'
-                            : `${eventTypeStyles[e.type].bg} ${eventTypeStyles[e.type].border} border ${e.completed ? 'opacity-50 line-through' : ''}`
+                            : e.completed
+                              ? 'bg-green-100 border-green-300 border text-green-700 line-through'
+                              : `${eventTypeStyles[e.type].bg} ${eventTypeStyles[e.type].border} border`
                         }`}
                       >
                         {e.title}
@@ -261,15 +263,18 @@ export default function CalendarioPage() {
               return (
                 <div
                   key={e.id}
-                  className={`rounded-lg border ${style.border} ${style.bg} ${e.completed ? 'opacity-60' : ''}`}
+                  className={`rounded-lg border ${e.completed ? 'border-green-300 bg-green-50' : `${style.border} ${style.bg}`}`}
                 >
                   {/* Cabecera del evento */}
                   <div className="flex items-start gap-2 p-3">
-                    <Icon className="w-4 h-4 mt-0.5 text-slate-700 flex-shrink-0" />
+                    <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${e.completed ? 'text-green-600' : 'text-slate-700'}`} />
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-semibold text-slate-800 ${e.completed ? 'line-through' : ''}`}>
+                      <p className={`text-sm font-semibold ${e.completed ? 'text-green-700 line-through' : 'text-slate-800'}`}>
                         {e.title}
                       </p>
+                      {e.completed && (
+                        <p className="text-xs text-green-600 font-semibold mt-0.5">✓ Completado</p>
+                      )}
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <span className="text-xs text-slate-500">{e.time} · {style.label}</span>
                         {e.difficulty && (

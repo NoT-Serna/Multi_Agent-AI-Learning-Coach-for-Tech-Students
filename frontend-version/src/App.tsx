@@ -47,9 +47,10 @@ const titles: Record<TabId, string> = {
 
 interface DashboardViewProps {
   createdAt: string | null;
+  onNavigate: (tab: TabId) => void;
 }
 
-function DashboardView({ createdAt }: DashboardViewProps) {
+function DashboardView({ createdAt, onNavigate }: DashboardViewProps) {
   const { session } = useAgentSession();
   const uid = getAuth().currentUser?.uid ?? null;
 
@@ -91,6 +92,7 @@ function DashboardView({ createdAt }: DashboardViewProps) {
             completedWeeks={session.completedWeeks}
             completedModulesByWeek={completedModulesByWeek}
             createdAt={createdAt}
+            onNavigate={onNavigate}
           />
         </div>
       </div>
@@ -476,9 +478,9 @@ export default function App() {
         <Header title={titles[tab]} />
 
         <main className="flex-1 p-6 overflow-y-auto">
-          {tab === 'dashboard'  && <DashboardView createdAt={createdAt} />}
+          {tab === 'dashboard'  && <DashboardView createdAt={createdAt} onNavigate={setTab} />}
           {tab === 'calendario' && <CalendarioPage />}
-          {tab === 'objetivos'  && <ObjetivosPage />}
+          {tab === 'objetivos'  && <ObjetivosPage onNavigate={setTab} />}
           {tab === 'quiz'       && <QuizPage onNavigate={setTab} />}
           {tab === 'recursos'   && <RecursosPage />}
           {tab === 'coach'      && <CoachIAPage onNavigate={setTab} />}

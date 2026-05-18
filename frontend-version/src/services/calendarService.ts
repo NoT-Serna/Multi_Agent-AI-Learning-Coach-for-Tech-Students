@@ -58,6 +58,17 @@ export async function markEventCompleted(uid: string, eventId: string): Promise<
   await updateDoc(eventRef, { completed: true });
 }
 
+// ─── toggleEventCompleted ─────────────────────────────────────────────────────
+
+/**
+ * Alterna el estado completed de un evento en Firestore.
+ * Permite marcar y desmarcar desde la sección de Objetivos.
+ */
+export async function toggleEventCompleted(uid: string, eventId: string, completed: boolean): Promise<void> {
+  const eventRef = doc(db, 'usuarios', uid, 'study_calendar', eventId);
+  await updateDoc(eventRef, { completed });
+}
+
 // ─── saveStudyCalendar ────────────────────────────────────────────────────────
 
 /**
