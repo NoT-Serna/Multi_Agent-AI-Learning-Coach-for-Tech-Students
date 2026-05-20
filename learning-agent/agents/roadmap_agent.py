@@ -113,11 +113,11 @@ Genera el roadmap personalizado de 4 semanas."""),
     # Build a readable summary for the student
     summary_lines = []
     for week in learning_roadmap:
-        summary_lines.append(f"\n**Semana {week['week']}** — {week['focus']}")
+        summary_lines.append(f"\n**Semana {week['week']}** — {week.get('focus', '')}")
         for mod in week.get("modules", []):
             summary_lines.append(
-                f"  • Módulo {mod['module_number']}: {mod['name']} "
-                f"({mod['difficulty']}) → {mod['objective']}"
+                f"  • Módulo {mod.get('module_number', '?')}: {mod.get('name', '')} "
+                f"({mod.get('difficulty', 'básico')}) → {mod.get('objective', '')}"
             )
 
     msg = AIMessage(content=(

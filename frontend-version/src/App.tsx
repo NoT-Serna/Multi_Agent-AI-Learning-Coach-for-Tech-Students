@@ -12,11 +12,13 @@ import CalendarioPage from './pages/CalendarioPage';
 import ObjetivosPage from './pages/ObjetivosPage';
 import RecursosPage from './pages/RecursosPage';
 import CoachIAPage from './pages/CoachIAPage';
+import QuizPage from './pages/QuizPage';
 import DiagnosticPage from './pages/DiagnosticPage';
 import AjustesPage from './pages/AjustesPage';
 import SignUpPage from './pages/SignUpPage';
 import LoginPage from './pages/LoginPage';
 import { useAgentSession } from './context/AgentSessionContext';
+import { useChatHistory } from './context/ChatHistoryContext';
 import { useWeekProgress } from './hooks/useWeekProgress';
 import { useDashboardStats } from './hooks/useDashboardStats';
 import { usePersistence } from './hooks/usePersistence';
@@ -36,10 +38,11 @@ type AuthScreen = 'login' | 'signup';
 const titles: Record<TabId, string> = {
   dashboard: 'Dashboard',
   calendario: 'Calendario',
-  objetivos: 'Objetivos',
-  recursos: 'Recursos',
-  coach: 'Coach IA',
-  ajustes: 'Ajustes',
+  objetivos:  'Objetivos',
+  quiz:       'Quiz Semanal',
+  recursos:   'Recursos',
+  coach:      'Coach IA',
+  ajustes:    'Ajustes',
 };
 
 interface DashboardViewProps {
@@ -117,6 +120,7 @@ export default function App() {
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
   const { session, startSession, clearError, restoreSession, setHydrating, resetSession } = useAgentSession();
+  const { resetChatHistory } = useChatHistory();
 
   // Ref to track whether the restore was cancelled ("Continuar sin restaurar")
   const restoreCancelledRef = useRef(false);
@@ -126,6 +130,10 @@ export default function App() {
   // When true, the Firebase Auth observer should skip the Firestore restore flow
   // because startSession will be triggered directly by the startSession useEffect.
   const freshSignUpRef = useRef(false);
+  // Idempotency guard: prevents startSession from being called more than once
+  // per account session, even if React StrictMode double-invokes effects or
+  // session.loading flips cause the effect to re-run mid-async.
+  const startSessionFiredRef = useRef(false);
 
   // ── usePersistence: fire-and-forget writes to Firestore ───────────────────
   const uid = getAuth().currentUser?.uid ?? null;
@@ -170,6 +178,11 @@ export default function App() {
               setCreatedAt(createdAtStr);
 
               // ── Task 8.1: Firestore session restoration ──────────────────
+              // NOTE: startSessionFiredRef is intentionally NOT reset here.
+              // It is only reset in onSignUp (fresh account) and onLogout (explicit logout).
+              // Resetting it here caused a diagnostic loop (Bug 1): after submitDiagnostic
+              // completed with diagnosticComplete=true, the Auth observer would reset the ref
+              // to false, allowing startSession to fire a second time.
               restoreCancelledRef.current = false;
               setHydrating(true);
 
@@ -249,11 +262,17 @@ export default function App() {
 
   // ── Trigger startSession when Firebase auth completes ──────────────────────
   useEffect(() => {
-    // Wait until hydration is done before deciding whether to start a new session.
-    // This covers the new-account case: Firebase Auth fires escucharAutenticacion,
-    // which sets hydrating=true, reads Firestore (finds nothing for a brand-new user),
-    // then sets hydrating=false — at that point this effect re-runs and starts the session.
-    if (!sesion || session.sessionId || session.loading || session.error || session.hydrating) return;
+    // Guard: only fire once per account session. Prevents double-invocation from
+    // React StrictMode, session.loading flips, or any other re-render cause.
+    if (startSessionFiredRef.current) return;
+    // Wait for sesion to be set and for hydration to finish before deciding
+    // whether to start a new agent session.
+    if (!sesion || session.sessionId || session.hydrating) return;
+    // Defense-in-depth: even if startSessionFiredRef were somehow reset, a session
+    // with diagnosticComplete = true must never trigger startSession again.
+    if (session.diagnosticComplete) return;
+
+    startSessionFiredRef.current = true;
 
     const userBackground = cursosDisponibles
       .filter((c) => (sesion.usuario.idsCursos as readonly number[]).includes(c.idCurso))
@@ -264,14 +283,12 @@ export default function App() {
       (sesion.usuario.intereses as readonly string[]).join(', ') || 'Sin preferencias';
 
     startSession({
-      student_name:    `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
-      user_background: userBackground,
+      student_name:     `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
+      user_background:  userBackground,
       user_preferences: userPreferences,
-      student_id:      String(sesion.usuario.id),
+      student_id:       String(sesion.usuario.id),
     });
-  // session.hydrating is intentionally included so the effect re-runs when
-  // hydration finishes (hydrating: true → false) for brand-new accounts.
-  }, [sesion, session.sessionId, session.loading, session.error, session.hydrating, startSession]);
+  }, [sesion, session.sessionId, session.hydrating, session.diagnosticComplete, startSession]);
 
   // ── Esperar a que Firebase resuelva el estado de auth ─────────────────────
   if (authChecking) {
@@ -322,6 +339,7 @@ export default function App() {
             // Reset any previous agent session so startSession fires cleanly
             // for this new account (covers the "second user" case).
             resetSession();
+            startSessionFiredRef.current = false;
             freshSignUpRef.current = true;
             setSesion(result);
           }}
@@ -338,7 +356,10 @@ export default function App() {
   }
 
   // ── Agent session starting ─────────────────────────────────────────────────
-  if (session.loading) {
+  // Only block the whole UI during the initial session creation (no sessionId yet).
+  // Quiz/diagnostic submissions have their own in-component loading states, so
+  // showing this loader would unmount the page component and lose local state.
+  if (session.loading && !session.sessionId) {
     return <FullScreenLoader message="Iniciando tu sesión de aprendizaje… (esto puede tardar hasta 5 minutos)" />;
   }
 
@@ -394,7 +415,9 @@ export default function App() {
           userName={`${sesion.usuario.nombre} ${sesion.usuario.apellido}`.trim()}
           userEmail={sesion.usuario.cuenta}
           onLogout={async () => {
+            resetChatHistory();
             resetSession();
+            startSessionFiredRef.current = false;
             freshSignUpRef.current = false;
             await cerrarSesion();
             setSesion(null);
@@ -440,7 +463,9 @@ export default function App() {
         userName={`${sesion.usuario.nombre} ${sesion.usuario.apellido}`.trim()}
         userEmail={sesion.usuario.cuenta}
         onLogout={async () => {
+          resetChatHistory();
           resetSession();
+          startSessionFiredRef.current = false;
           freshSignUpRef.current = false;
           await cerrarSesion();
           setSesion(null);
@@ -451,12 +476,13 @@ export default function App() {
         <Header title={titles[tab]} />
 
         <main className="flex-1 p-6 overflow-y-auto">
-          {tab === 'dashboard' && <DashboardView createdAt={createdAt} />}
+          {tab === 'dashboard'  && <DashboardView createdAt={createdAt} />}
           {tab === 'calendario' && <CalendarioPage />}
-          {tab === 'objetivos' && <ObjetivosPage />}
-          {tab === 'recursos' && <RecursosPage />}
-          {tab === 'coach' && <CoachIAPage />}
-          {tab === 'ajustes' && (
+          {tab === 'objetivos'  && <ObjetivosPage />}
+          {tab === 'quiz'       && <QuizPage onNavigate={setTab} />}
+          {tab === 'recursos'   && <RecursosPage />}
+          {tab === 'coach'      && <CoachIAPage onNavigate={setTab} />}
+          {tab === 'ajustes'    && (
             <AjustesPage usuario={sesion.usuario} onUpdateUsuario={actualizarUsuario} />
           )}
         </main>

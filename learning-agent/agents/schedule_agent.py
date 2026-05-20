@@ -422,10 +422,13 @@ def generate_schedule(state: AgentState) -> AgentState:
         # Primera vez: empezar desde hoy mismo
         start_date = date.today()
 
-    # Generar recomendaciones con LLM solo para semanas pendientes
+    # Generar recomendaciones con LLM solo para semanas pendientes.
+    # Controlado por SCHEDULE_USE_LLM=true en .env — por defecto desactivado
+    # para evitar timeouts en hardware lento (el fallback usa los datos del roadmap).
     pending_weeks = [w for w in roadmap if w.get("week", 0) not in completed_weeks]
     recommendations: Dict[str, DailyRecommendation] = {}
-    if pending_weeks:
+    use_llm = os.getenv("SCHEDULE_USE_LLM", "false").lower() == "true"
+    if pending_weeks and use_llm:
         try:
             recommendations = _generate_daily_recommendations(
                 pending_weeks, student_name, weak_skills, user_preferences
@@ -436,6 +439,8 @@ def generate_schedule(state: AgentState) -> AgentState:
                 "No se pudieron generar recomendaciones con LLM: %s. "
                 "Se usarán los datos del roadmap como fallback.", exc
             )
+    elif pending_weeks:
+        logger.info("SCHEDULE_USE_LLM no activo — usando datos del roadmap como fallback.")
 
     # Construir eventos (7 por semana)
     events = _build_calendar_events(

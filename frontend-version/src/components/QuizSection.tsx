@@ -34,7 +34,7 @@ export default function QuizSection() {
     const answersArray = questions.map((q) => answers[q.id]);
     const res = await submitQuiz(answersArray);
     if (res) {
-      setResult({ passed: res.quiz_passed, score: res.score });
+      setResult({ passed: res.quiz_passed ?? false, score: res.score });
     }
     setSubmitting(false);
   };

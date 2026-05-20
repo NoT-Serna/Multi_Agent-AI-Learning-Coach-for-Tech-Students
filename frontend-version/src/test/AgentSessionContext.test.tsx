@@ -98,7 +98,10 @@ describe('AgentSessionContext', () => {
   });
 
   // Feature: frontend-agent-integration, Property 13: Rehydration calls getSession with stored sessionId
-  it('Property 13: rehydration calls getSession with the stored sessionId', async () => {
+  // NOTE: This test is skipped because the sessionStorage-based rehydration that called
+  // agentApi.getSession has been removed. Rehydration is now handled by App.tsx + usePersistence
+  // using Firestore as the source of truth (see state-persistence spec and session-isolation-bugs spec).
+  it.skip('Property 13: rehydration calls getSession with the stored sessionId', async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.uuid(),
@@ -120,7 +123,10 @@ describe('AgentSessionContext', () => {
   });
 
   // Feature: frontend-agent-integration, Property 14: Expired session clears sessionStorage
-  it('Property 14: 404 from getSession clears sessionStorage', async () => {
+  // NOTE: This test is skipped because the sessionStorage-based rehydration that called
+  // agentApi.getSession has been removed. Rehydration is now handled by App.tsx + usePersistence
+  // using Firestore as the source of truth (see state-persistence spec and session-isolation-bugs spec).
+  it.skip('Property 14: 404 from getSession clears sessionStorage', async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.uuid(),

@@ -23,7 +23,6 @@ import type {
   QuizQuestion,
   QuizSubmitResponse,
   RoadmapWeek,
-  SessionState,
 } from '../types/agent';
 
 // ── Shape of the context value ────────────────────────────────────────────────
@@ -55,6 +54,8 @@ export interface AgentSession {
   // UI state
   loading: boolean;
   error: string | null;
+  /** true while the user is actively answering the current quiz (Start Quiz clicked, not yet submitted) */
+  inQuizMode: boolean;
 
   // Rehydration state
   hydrating: boolean;
@@ -82,6 +83,9 @@ interface AgentSessionContextValue {
 
   /** Clear any error message. */
   clearError(): void;
+
+  /** Set whether the user is actively taking the quiz (blocks chatbot). */
+  setInQuizMode(value: boolean): void;
 
   /** Reset the entire session back to the empty state. */
   resetSession(): void;
@@ -117,31 +121,9 @@ const emptySession: AgentSession = {
   quizPassed:           null,
   loading:              false,
   error:                null,
+  inQuizMode:           false,
   hydrating:            false,
 };
-
-// ── Helper: map SessionState (API) → AgentSession (context) ──────────────────
-
-function mapSessionStateToAgentSession(state: SessionState): AgentSession {
-  return {
-    sessionId:           state.session_id,
-    studentName:         state.student_name,
-    diagnosticQuestions: [],          // not returned by getSession; user must re-answer if needed
-    diagnosticComplete:  state.diagnostic_complete,
-    skillScores:         state.skill_scores,
-    strongSkills:        state.strong_skills,
-    weakSkills:          state.weak_skills,
-    learningRoadmap:     state.learning_roadmap,
-    currentWeek:         state.current_week ?? 1,
-    completedWeeks:      state.completed_weeks,
-    quizQuestions:       state.quiz_questions,
-    quizScores:          state.quiz_scores,
-    quizPassed:          state.quiz_passed,
-    loading:             false,
-    error:               null,
-    hydrating:           false,
-  };
-}
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
@@ -196,26 +178,44 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     }
     setLoading(true);
     try {
+      const { auth } = await import('../services/firebase');
       const res = await agentApi.submitDiagnostic({
         session_id: session.sessionId,
         answers,
+        user_id: auth.currentUser?.uid,
       });
       setSession((s) => ({
         ...s,
-        diagnosticComplete: true,
-        skillScores:        res.skill_scores,
-        strongSkills:       res.strong_skills,
-        weakSkills:         res.weak_skills,
-        learningRoadmap:    res.learning_roadmap,
-        quizQuestions:      res.quiz_questions,
-        currentWeek:        res.current_week,
-        loading:            false,
-        error:              null,
+        diagnosticComplete:  true,
+        diagnosticQuestions: [],   // clear so the diagnostic screen never re-appears
+        skillScores:         res.skill_scores,
+        strongSkills:        res.strong_skills,
+        weakSkills:          res.weak_skills,
+        learningRoadmap:     res.learning_roadmap,
+        quizQuestions:       res.quiz_questions,
+        currentWeek:         res.current_week,
+        loading:             false,
+        error:               null,
       }));
+
+      // Persist the study calendar to Firestore so CalendarioPage can read it.
+      // Import is deferred to avoid a circular dependency at module load time.
+      if (res.study_calendar && res.study_calendar.length > 0) {
+        const { auth } = await import('../services/firebase');
+        const { saveStudyCalendar } = await import('../services/calendarService');
+        const uid = auth.currentUser?.uid;
+        if (uid) {
+          // Fire-and-forget — don't block the UI on this write.
+          saveStudyCalendar(uid, res.study_calendar, []).catch((err) => {
+            console.error('[submitDiagnostic] saveStudyCalendar failed:', err);
+          });
+        }
+      }
 
       return res;
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message ?? '';
+      setError(message);
       return null;
     }
   }, [session.sessionId]);
@@ -230,13 +230,19 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     }
     setLoading(true);
     try {
+      const { auth } = await import('../services/firebase');
       const res = await agentApi.submitQuiz({
         session_id: session.sessionId,
         answers,
+        user_id: auth.currentUser?.uid,
       });
+      // next_step is the reliable pass signal: after passing, generate_quiz runs
+      // for the next week and resets quiz_passed to null in the state snapshot.
+      const actuallyPassed =
+        res.next_step === 'next_week' || res.next_step === 'completed';
       setSession((s) => ({
         ...s,
-        quizPassed:      res.quiz_passed,
+        quizPassed:      actuallyPassed ? true : (res.quiz_passed ?? false),
         quizScores:      res.quiz_scores,
         currentWeek:     res.current_week,
         completedWeeks:  res.completed_weeks,
@@ -245,6 +251,18 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         loading:         false,
         error:           null,
       }));
+
+      // Persist the updated study calendar to Firestore after each quiz.
+      if (res.study_calendar && res.study_calendar.length > 0) {
+        const { auth } = await import('../services/firebase');
+        const { saveStudyCalendar } = await import('../services/calendarService');
+        const uid = auth.currentUser?.uid;
+        if (uid) {
+          saveStudyCalendar(uid, res.study_calendar, res.completed_weeks).catch((err) => {
+            console.error('[submitQuiz] saveStudyCalendar failed:', err);
+          });
+        }
+      }
 
       return res;
     } catch (err) {
@@ -258,18 +276,32 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     if (!session.sessionId) return 'No hay sesión activa. Completa el registro primero.';
     try {
       const res = await agentApi.chat({
-        session_id: session.sessionId,
+        session_id:      session.sessionId,
         message,
+        // Pass the learning context so the backend can respond even after a
+        // server restart (when the in-memory session is gone).
+        student_name:    session.studentName ?? undefined,
+        learning_roadmap: session.learningRoadmap,
+        skill_scores:    session.skillScores,
+        strong_skills:   session.strongSkills,
+        weak_skills:     session.weakSkills,
+        current_week:    session.currentWeek,
+        completed_weeks: session.completedWeeks,
       });
       return res.response;
     } catch (err) {
       return `Error al contactar al coach: ${(err as Error).message}`;
     }
-  }, [session.sessionId]);
+  }, [session.sessionId, session.studentName, session.learningRoadmap, session.skillScores, session.strongSkills, session.weakSkills, session.currentWeek, session.completedWeeks]);
 
   // ── clearError ──────────────────────────────────────────────────────────────
   const clearError = useCallback(() => {
     setSession((s) => ({ ...s, error: null }));
+  }, []);
+
+  // ── setInQuizMode ────────────────────────────────────────────────────────────
+  const setInQuizMode = useCallback((value: boolean) => {
+    setSession((s) => ({ ...s, inQuizMode: value }));
   }, []);
 
   // ── resetSession ─────────────────────────────────────────────────────────────
@@ -290,7 +322,7 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <AgentSessionContext.Provider
-      value={{ session, startSession, submitDiagnostic, submitQuiz, chat, clearError, resetSession, restoreSession, setHydrating }}
+      value={{ session, startSession, submitDiagnostic, submitQuiz, chat, clearError, setInQuizMode, resetSession, restoreSession, setHydrating }}
     >
       {children}
     </AgentSessionContext.Provider>

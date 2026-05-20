@@ -51,6 +51,7 @@ export interface QuizQuestion {
   options: Record<'A' | 'B' | 'C' | 'D', string>;
   correct_answer: string;
   skill_tested: string;
+  justification?: string;
 }
 
 // ── API response shapes ───────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ export interface DiagnosticSubmitResponse {
 }
 
 export interface QuizSubmitResponse {
-  quiz_passed: boolean;
+  quiz_passed: boolean | null;
   score: number;
   next_step: string;
   current_week: number;
