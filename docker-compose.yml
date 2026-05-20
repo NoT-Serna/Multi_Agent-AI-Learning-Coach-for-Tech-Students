@@ -14,14 +14,15 @@ services:
   # 2. El puente: Tu API (FastAPI)
   backend:
     build: 
-      context: ./learning-agent
+      context: .
+      dockerfile: ./learning-agent/Dockerfile
     ports:
       - "8006:8006"
     environment:
       # Aquí le decimos que Ollama vive en la red de Docker, no en localhost
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=llama3.2:3b
-      - FIREBASE_SERVICE_ACCOUNT_PATH=/app/serviceAccountKey.json 
+      - FIREBASE_SERVICE_ACCOUNT_KEY=/app/serviceAccountKey.json 
     volumes:
       # Inyecta tu llave de Firebase sin guardarla en el contenedor
       - ./learning-agent/serviceAccountKey.json:/app/serviceAccountKey.json:ro
