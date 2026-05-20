@@ -64,11 +64,9 @@ try:
     logger.info("Firestore client created successfully")
     
 except Exception as e:
-    logger.error(f"Failed to initialize Firebase Admin SDK: {str(e)}")
-    raise HTTPException(
-        status_code=500,
-        detail=f"Firebase initialization failed: {str(e)}"
-    )
+    # In local/dev Docker runs, the credential file may be a placeholder or missing.
+    # Keep the API alive and run in degraded mode without Firestore instead of crashing.
+    logger.warning(f"Firebase disabled for this run: {str(e)}")
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 

@@ -145,7 +145,7 @@ function makeSubmitDiagnosticResponse(sessionId: string) {
     learning_roadmap: [],
     quiz_questions: [],
     current_week: 1,
-    study_calendar: [],
+    study_calendar: [], message: 'ok',
   };
 }
 
