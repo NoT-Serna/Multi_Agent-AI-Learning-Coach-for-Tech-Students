@@ -13,6 +13,8 @@ import os
 import sys
 import uuid
 import logging
+from datetime import date, timedelta
+from typing import List
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -86,6 +88,43 @@ api.add_middleware(
 # ── In-memory session store (keyed by session_id) ─────────────────────────────
 # Each value is the latest AgentState snapshot for that session.
 _sessions: dict[str, dict] = {}
+
+
+# ── Calendar reschedule helper ────────────────────────────────────────────────
+
+def _reschedule_pending_weeks(
+    events: List[dict],
+    completed_weeks: List[int],
+    current_week: int,
+) -> List[dict]:
+    """
+    Recalculate dates for pending weeks so that `current_week` starts today.
+    Completed weeks keep their original dates and completed=True flags.
+    Day offsets within each week follow the schedule_agent convention:
+      module 1 study: day 0, review: day 1
+      module 2 study: day 2, review: day 3
+      module 3 study: day 4, review: day 5
+      quiz (moduleNumber=0): day 6
+    """
+    today = date.today()
+    rescheduled = []
+    for event in events:
+        week_num = event.get("week", 0)
+        if week_num in completed_weeks:
+            rescheduled.append(event)
+            continue
+        module_number = event.get("moduleNumber", 0)
+        event_type    = event.get("type", "study")
+        if module_number == 0:
+            day_offset = 6
+        elif event_type == "study":
+            day_offset = (module_number - 1) * 2
+        else:
+            day_offset = (module_number - 1) * 2 + 1
+        week_offset = week_num - current_week   # 0 for current week, 1 for next…
+        new_date = today + timedelta(weeks=week_offset, days=day_offset)
+        rescheduled.append({**event, "date": new_date.isoformat(), "completed": False})
+    return rescheduled
 
 # Firestore collection that maps session_id → Firebase UID.
 # Written on every new session; queried when restoring after a server restart.
@@ -518,6 +557,7 @@ def submit_quiz(req: QuizSubmitRequest):
     response_quiz_passed  = state.get("quiz_passed")
     response_quiz_scores  = quiz_scores
     response_quiz_questions = quiz_questions
+    response_study_calendar = state.get("study_calendar", [])
 
     if next_step == "next_week" and current_week <= 4:
         # Passed → pre-generate questions for the upcoming week.
@@ -532,6 +572,20 @@ def submit_quiz(req: QuizSubmitRequest):
                 "next_step":         "await_quiz_answers",
                 "current_quiz_week": current_week,   # now the next week
             }
+
+            # Reschedule remaining weeks so the new current week starts today.
+            existing_calendar    = state.get("study_calendar", [])
+            completed_weeks_list = state.get("completed_weeks", [])
+            if existing_calendar:
+                rescheduled = _reschedule_pending_weeks(
+                    existing_calendar, completed_weeks_list, current_week
+                )
+                response_study_calendar = rescheduled
+                pre_state["study_calendar"] = rescheduled
+                logger.info(
+                    f"[submit_quiz] Rescheduled calendar: week {current_week} starts today."
+                )
+
             _sessions[req.session_id] = pre_state
             langgraph_app.update_state(config, pre_state, as_node="generate_quiz")
             logger.info(f"[submit_quiz] Pre-generated week {current_week} quiz questions.")
@@ -571,7 +625,7 @@ def submit_quiz(req: QuizSubmitRequest):
         completed_weeks = state.get("completed_weeks",  []),
         quiz_scores     = response_quiz_scores,
         learning_roadmap= state.get("learning_roadmap", []),
-        study_calendar  = state.get("study_calendar",   []),
+        study_calendar  = response_study_calendar,
         quiz_questions  = response_quiz_questions,
         message         = _last_ai_message(state),
     )
