@@ -53,7 +53,7 @@ export default function ObjetivosPage({ onNavigate }: ObjetivosPageProps) {
   const [toggling, setToggling] = useState<Set<string>>(new Set());
   const uid = getAuth().currentUser?.uid;
 
-  const actionableEvents = events.filter((e) => e.type !== 'deadline');
+  const actionableEvents = events.filter((e) => e.type !== 'deadline' && e.moduleNumber > 0);
 
   // Double-keyed: week → moduleNumber → events[]
   const byWeekModule = actionableEvents.reduce<Record<number, Record<number, CalendarEvent[]>>>(
@@ -420,61 +420,6 @@ export default function ObjetivosPage({ onNavigate }: ObjetivosPageProps) {
                     );
                   })}
 
-                  {/* Review events (moduleNumber 0 — not tied to a specific module) */}
-                  {(weekModMap[0] ?? []).length > 0 && (
-                    <div>
-                      <div className="px-5 py-2 bg-amber-50/60 border-t border-amber-100">
-                        <span className="text-xs font-semibold text-amber-600 uppercase tracking-wide">
-                          Repaso semanal
-                        </span>
-                      </div>
-                      {(weekModMap[0] ?? []).map((event) => {
-                        const isPending = toggling.has(event.id);
-                        const label = event.objective || event.title;
-                        return (
-                          <button
-                            key={event.id}
-                            disabled={!canEdit || isPending}
-                            onClick={() => handleToggle(event)}
-                            className={`w-full flex items-start gap-3 px-5 py-2.5 text-left transition-colors ${
-                              event.completed
-                                ? 'bg-green-50 hover:bg-green-100'
-                                : 'hover:bg-slate-50'
-                            } ${
-                              isPending
-                                ? 'opacity-50 cursor-wait'
-                                : !canEdit
-                                ? 'cursor-default'
-                                : 'cursor-pointer'
-                            }`}
-                          >
-                            <div className="mt-0.5 shrink-0">
-                              {event.completed ? (
-                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                              ) : (
-                                <Circle className="w-4 h-4 text-slate-300" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-start justify-between gap-2">
-                                <p
-                                  className={`text-xs font-medium ${
-                                    event.completed ? 'text-green-700 line-through' : 'text-slate-700'
-                                  }`}
-                                >
-                                  {label}
-                                </p>
-                                <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                              </div>
-                              <span className="text-xs text-slate-400">
-                                {formatDate(event.date)}
-                              </span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
                 </div>
 
                 {/* ── Quiz button — only when current week and all tasks done ── */}

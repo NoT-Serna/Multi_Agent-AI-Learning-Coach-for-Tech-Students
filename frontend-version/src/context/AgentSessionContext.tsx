@@ -204,19 +204,9 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         error:               null,
       }));
 
-      // Persist the study calendar to Firestore so CalendarioPage can read it.
-      // Import is deferred to avoid a circular dependency at module load time.
-      if (res.study_calendar && res.study_calendar.length > 0) {
-        const { auth } = await import('../services/firebase');
-        const { saveStudyCalendar } = await import('../services/calendarService');
-        const uid = auth.currentUser?.uid;
-        if (uid) {
-          // Fire-and-forget — don't block the UI on this write.
-          saveStudyCalendar(uid, res.study_calendar, []).catch((err) => {
-            console.error('[submitDiagnostic] saveStudyCalendar failed:', err);
-          });
-        }
-      }
+      // The backend's generate_schedule already writes the calendar to Firestore.
+      // The onSnapshot listener in useStudyCalendar picks it up automatically.
+      // A second write here would race with the backend's write and cause duplicates.
 
       return res;
     } catch (err) {
@@ -261,8 +251,11 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         error:           null,
       }));
 
-      // Persist the updated study calendar to Firestore after each quiz.
-      if (res.study_calendar && res.study_calendar.length > 0) {
+      // Only persist the calendar when the quiz passed and the backend rescheduled
+      // pending weeks in memory (next_week). For adjust_roadmap the backend's
+      // generate_schedule already wrote to Firestore; writing again would cause
+      // duplicates. For retry_quiz the calendar is unchanged.
+      if (res.next_step === 'next_week' && res.study_calendar && res.study_calendar.length > 0) {
         const { auth } = await import('../services/firebase');
         const { saveStudyCalendar } = await import('../services/calendarService');
         const uid = auth.currentUser?.uid;
@@ -302,6 +295,10 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         current_week:     session.currentWeek,
         completed_weeks:  session.completedWeeks,
         quiz_scores:      session.quizScores,
+        // Let the backend know whether the user is actively answering a quiz.
+        // This overrides the backend's own _is_quiz_mode() which is too aggressive
+        // (it blocks chat even before the user clicks "Start Quiz").
+        in_quiz_mode:     session.inQuizMode,
       });
 
       // If the chatbot modified the roadmap, update the local session state.
@@ -315,7 +312,7 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       return `Error al contactar al coach: ${(err as Error).message}`;
     }
-  }, [session.sessionId, session.studentName, session.userPreferences, session.userBackground, session.learningRoadmap, session.skillScores, session.strongSkills, session.weakSkills, session.currentWeek, session.completedWeeks, session.quizScores]);
+  }, [session.sessionId, session.studentName, session.userPreferences, session.userBackground, session.learningRoadmap, session.skillScores, session.strongSkills, session.weakSkills, session.currentWeek, session.completedWeeks, session.quizScores, session.inQuizMode]);
 
   // ── clearError ──────────────────────────────────────────────────────────────
   const clearError = useCallback(() => {

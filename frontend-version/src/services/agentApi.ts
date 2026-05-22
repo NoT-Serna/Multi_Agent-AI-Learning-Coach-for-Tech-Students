@@ -143,6 +143,7 @@ export const agentApi = {
     completed_weeks?: number[];
     quiz_scores?: Record<string, number>;
     study_calendar?: unknown[];
+    in_quiz_mode?: boolean;
   }): Promise<ChatResponse> {
     return request('POST', '/chat', params, AI_TIMEOUT_MS);
   },

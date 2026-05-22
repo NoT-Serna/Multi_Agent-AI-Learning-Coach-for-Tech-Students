@@ -70,6 +70,12 @@ def _filter_to_weekdays(events: list) -> list:
 # ─── Helpers ──────────────────────────────────────────────────────────────────────────────
 
 def _is_quiz_mode(state: AgentState) -> bool:
+    # If the frontend explicitly sent its in_quiz_mode flag, trust it — the client
+    # knows whether the user is actively answering the quiz better than the backend
+    # state does (the backend is in "await_quiz_answers" even before the user starts).
+    if "in_quiz_mode" in state:
+        return bool(state["in_quiz_mode"])
+    # Fallback: infer from backend state fields.
     if state.get("next_step") == "await_quiz_answers":
         return True
     if len(state.get("quiz_questions", [])) > 0 and state.get("quiz_passed") is None:

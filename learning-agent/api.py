@@ -106,7 +106,7 @@ def _reschedule_pending_weeks(
       module 3 study: day 4, review: day 5
       quiz (moduleNumber=0): day 6
     """
-    today = date.today()
+    tomorrow = date.today() + timedelta(days=1)
     rescheduled = []
     for event in events:
         week_num = event.get("week", 0)
@@ -122,7 +122,7 @@ def _reschedule_pending_weeks(
         else:
             day_offset = (module_number - 1) * 2 + 1
         week_offset = week_num - current_week   # 0 for current week, 1 for next…
-        new_date = today + timedelta(weeks=week_offset, days=day_offset)
+        new_date = tomorrow + timedelta(weeks=week_offset, days=day_offset)
         rescheduled.append({**event, "date": new_date.isoformat(), "completed": False})
     return rescheduled
 
@@ -348,6 +348,10 @@ class ChatRequest(BaseModel):
     completed_weeks: list[int] | None = None
     quiz_scores: dict[str, float] | None = None
     study_calendar: list[dict] | None = None
+    # Frontend quiz-mode flag: True only while the user is actively answering
+    # the quiz (Start Quiz clicked, not yet submitted).  Used to override the
+    # backend's _is_quiz_mode() check which can be overly aggressive.
+    in_quiz_mode: bool | None = None
 
 
 class ChatResponse(BaseModel):
@@ -641,14 +645,18 @@ def chat(req: ChatRequest):
     restart), the endpoint falls back to the learning context fields supplied
     directly in the request body so the chatbot can still respond correctly.
     """
-    # Try to get the full LangGraph state; fall back to a lightweight context
-    # built from the fields the caller sent when the session is missing.
+    # 1. Try in-memory store first (fastest path).
     state = _sessions.get(req.session_id)
 
+    # 2. If not in memory (e.g. after a server restart), try to reconstruct from
+    #    Firestore so the chatbot has the full session context (roadmap, scores…).
     if state is None:
-        # Build a minimal state from the context the frontend already has.
-        # The chatbot agent only reads the fields below — it does not need the
-        # full LangGraph graph state to generate a response.
+        state = _try_restore_session(req.session_id, req.uid)
+
+    # 3. Last-resort fallback: build a minimal state from the context the frontend
+    #    sent in the request body.  quiz_questions and next_step are left empty/None
+    #    so _is_quiz_mode() does not incorrectly block the chatbot.
+    if state is None:
         state = {
             "student_name":     req.student_name or "",
             "user_preferences": req.user_preferences or "",
@@ -666,10 +674,24 @@ def chat(req: ChatRequest):
             "next_step":        None,
             "messages":         [],
         }
+    else:
+        # State found (in memory or restored from Firestore).
+        # If the stored roadmap is empty but the frontend sent a populated one
+        # (e.g. the LLM returned bad JSON during generate_roadmap), use the
+        # frontend's version so the chatbot doesn't say "no plan yet".
+        if req.learning_roadmap and not state.get("learning_roadmap"):
+            state = {**state, "learning_roadmap": req.learning_roadmap}
 
     # Inject the Firebase UID so the chatbot can write calendar changes to Firestore.
+    # Also pass the frontend's in_quiz_mode flag so the chatbot uses the authoritative
+    # client-side value instead of the backend's over-aggressive _is_quiz_mode() check.
+    overlay: dict = {}
     if req.uid:
-        state = {**state, "_chat_uid": req.uid}
+        overlay["_chat_uid"] = req.uid
+    if req.in_quiz_mode is not None:
+        overlay["in_quiz_mode"] = req.in_quiz_mode
+    if overlay:
+        state = {**state, **overlay}
 
     # Add the user message to the state's message history
     current_messages = list(state.get("messages", []))
