@@ -17,6 +17,7 @@ def build_llm():
         base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         temperature=0,
+        num_ctx=8192,
         callbacks=callbacks,
     )
     return llm, llm.bind(format="json")

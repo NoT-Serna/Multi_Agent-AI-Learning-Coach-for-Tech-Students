@@ -1,10 +1,13 @@
 import json
+import logging
 from typing import Dict, List
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from agents.llm_factory import build_llm
 from schemas.state import AgentState
+
+logger = logging.getLogger(__name__)
 
 # ─── LLM ──────────────────────────────────────────────────────────────────────
 llm, llm_json = build_llm()
@@ -148,7 +151,16 @@ def evaluate_quiz_answers(state: AgentState) -> AgentState:
     max_attempts      = state.get("max_attempts",      3)
     completed_weeks   = state.get("completed_weeks",   [])
 
+    logger.info(
+        "[evaluate_quiz_answers] questions=%d answers=%d values=%s",
+        len(quiz_questions), len(quiz_answers), quiz_answers,
+    )
+
     if not quiz_questions or not quiz_answers:
+        logger.warning(
+            "[evaluate_quiz_answers] Missing data — questions=%d answers=%d",
+            len(quiz_questions), len(quiz_answers),
+        )
         return {
             **state,
             "error_message": "No hay preguntas o respuestas para evaluar.",
@@ -156,53 +168,32 @@ def evaluate_quiz_answers(state: AgentState) -> AgentState:
             "next_step":     "error",
         }
 
-    # Pair questions with student answers for the LLM
-    qa_pairs = [
-        {
-            "id":             q.get("id", f"q{i}"),
-            "question":       q.get("question", ""),
-            "correct_answer": q.get("correct_answer", ""),
-            "student_answer": quiz_answers[i] if i < len(quiz_answers) else "sin respuesta",
-            "skill_tested":   q.get("skill_tested", ""),
-            "module_reference": q.get("module_reference", ""),
-        }
+    # Deterministic scoring — compare answers directly, no LLM needed.
+    # Normalize both sides to guard against LLM formatting quirks (lowercase, periods, spaces).
+    def _norm(s: str) -> str:
+        # Extract just the first uppercase character so "A.", "A) text", "a" all equal "A"
+        s = s.strip().upper()
+        return s[0] if s else ""
+
+    total         = len(quiz_questions)
+    correct_count = sum(
+        1 for i, q in enumerate(quiz_questions)
+        if i < len(quiz_answers)
+        and _norm(quiz_answers[i]) == _norm(q.get("correct_answer", ""))
+    )
+    score: float  = round((correct_count / total) * 100, 1)
+    passed: bool  = score >= PASSING_SCORE
+
+    # Derive weak areas from incorrectly answered questions
+    weak_areas = list({
+        q.get("skill_tested", "")
         for i, q in enumerate(quiz_questions)
-    ]
-
-    response = llm_json.invoke([
-        SystemMessage(content=f"""Eres un evaluador educativo.
-Evalúa las respuestas del estudiante al quiz de la semana {current_quiz_week}.
-
-Calcula:
-1. El puntaje total (0-100)
-2. Cuántas preguntas respondió correctamente
-3. Si aprobó (score >= {PASSING_SCORE})
-4. Un resumen motivador del desempeño
-
-Responde ÚNICAMENTE con JSON válido:
-{{
-  "score": 80.0,
-  "correct_count": 4,
-  "total_questions": 5,
-  "passed": true,
-  "weak_areas": ["habilidad que falló"],
-  "summary": "resumen del desempeño"
-}}"""),
-
-        HumanMessage(content=f"""Estudiante: {name}
-Semana evaluada: {current_quiz_week}
-
-Preguntas y respuestas:
-{json.dumps(qa_pairs, ensure_ascii=False, indent=2)}
-
-Evalúa y retorna el JSON."""),
-    ])
-
-    evaluation     = _parse_json(response.content)
-    score: float   = evaluation.get("score",          0.0)
-    passed: bool   = evaluation.get("passed",         False)
-    summary: str   = evaluation.get("summary",        "")
-    weak_areas     = evaluation.get("weak_areas",     [])
+        if not (
+            i < len(quiz_answers)
+            and _norm(quiz_answers[i]) == _norm(q.get("correct_answer", ""))
+        )
+        and q.get("skill_tested")
+    })
 
     # Update quiz scores and attempts
     week_key              = f"week_{current_quiz_week}"
@@ -218,8 +209,8 @@ Evalúa y retorna el JSON."""),
         next_step         = "next_week" if next_week <= 4 else "completed"
 
         msg = AIMessage(content=(
-            f"🎉 **¡Felicitaciones {name}!**\n\n{summary}\n\n"
-            f"**Puntaje: {score:.0f}/100** — ✅ Aprobado\n\n"
+            f"🎉 **¡Felicitaciones {name}!**\n\n"
+            f"**Puntaje: {score:.0f}/100** ({correct_count}/{total} correctas) — ✅ Aprobado\n\n"
             + (f"Avanzas a la semana {next_week}. ¡Sigue así!"
                if next_week <= 4
                else "¡Completaste el plan de estudio! 🏆")
@@ -255,8 +246,8 @@ Evalúa y retorna el JSON."""),
             )
 
         msg = AIMessage(content=(
-            f"**Resultado semana {current_quiz_week}**\n\n{summary}\n\n"
-            f"**Puntaje: {score:.0f}/100** — ❌ No aprobado (mínimo {PASSING_SCORE:.0f})\n\n"
+            f"**Resultado semana {current_quiz_week}**\n\n"
+            f"**Puntaje: {score:.0f}/100** ({correct_count}/{total} correctas) — ❌ No aprobado (mínimo {PASSING_SCORE:.0f})\n\n"
             f"Áreas a reforzar: {', '.join(weak_areas) if weak_areas else 'revisar todos los módulos'}\n\n"
             f"{feedback}"
         ))

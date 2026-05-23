@@ -1,11 +1,16 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   CheckCircle2, Circle, Play, BookOpen, Code, FileText, Video, RotateCcw, Loader2,
 } from 'lucide-react';
 import { weeklyTasks, type WeeklyTask } from '../data/mockData';
 import { useAgentSession } from '../context/AgentSessionContext';
-import { useWeekProgress } from '../hooks/useWeekProgress';
-import { registrarActividad } from '../services/dashboardStatsService';
+import { useStudyCalendar } from '../hooks/useStudyCalendar';
+import { toggleEventCompleted } from '../services/calendarService';
+import {
+  guardarModuloCompletado,
+  eliminarModuloCompletado,
+  registrarActividad,
+} from '../services/dashboardStatsService';
 import type { RoadmapModule } from '../types/agent';
 import { getAuth } from 'firebase/auth';
 
@@ -70,21 +75,58 @@ export default function WeeklyPlan() {
     ? session.learningRoadmap[session.currentWeek - 1] ?? session.learningRoadmap[0]
     : null;
 
-  // ── Roadmap mode — persistent state via useWeekProgress ───────────────────
-  const { completedModules, loading, toggleModule } = useWeekProgress(
-    hasRoadmap ? uid : null,
-    session.currentWeek,
+  // ── Roadmap mode — derive completion from study_calendar (same source as ObjetivosPage) ──
+  const { events, loading } = useStudyCalendar(hasRoadmap);
+  const [toggling, setToggling] = useState<Set<number>>(new Set());
+
+  const currentWeekEvents = useMemo(
+    () => events.filter((e) => e.week === session.currentWeek && e.type !== 'deadline'),
+    [events, session.currentWeek],
   );
 
-  const handleToggleModule = (moduleNumber: number) => {
-    // Fire-and-forget: toggle in Firestore
-    toggleModule(moduleNumber);
+  // A module is done when ALL its calendar events are completed
+  const completedModules = useMemo(() => {
+    if (!currentWeekData) return new Set<number>();
+    const result = new Set<number>();
+    for (const mod of currentWeekData.modules) {
+      const modEvents = currentWeekEvents.filter((e) => e.moduleNumber === mod.module_number);
+      if (modEvents.length > 0 && modEvents.every((e) => e.completed)) {
+        result.add(mod.module_number);
+      }
+    }
+    return result;
+  }, [currentWeekEvents, currentWeekData]);
 
-    // Also register activity for today (async, silent — Req 1.1)
-    if (uid !== null) {
+  const handleToggleModule = async (moduleNumber: number) => {
+    if (!uid || toggling.has(moduleNumber)) return;
+    setToggling((prev) => new Set(prev).add(moduleNumber));
+
+    const modEvents = currentWeekEvents.filter((e) => e.moduleNumber === moduleNumber);
+    const allDone = modEvents.length > 0 && modEvents.every((e) => e.completed);
+    const targetCompleted = !allDone;
+
+    try {
+      // Toggle all study_calendar events (synced with ObjetivosPage / GoalsProgress)
+      await Promise.all(modEvents.map((e) => toggleEventCompleted(uid, e.id, targetCompleted)));
+
+      // Also update week_progress so QuizPage stays consistent
+      if (targetCompleted) {
+        await guardarModuloCompletado(uid, session.currentWeek, moduleNumber);
+      } else {
+        await eliminarModuloCompletado(uid, session.currentWeek, moduleNumber);
+      }
+
       const today = new Date().toISOString().slice(0, 10);
       registrarActividad(uid, today).catch((err) => {
         console.error('WeeklyPlan: failed to register activity:', err);
+      });
+    } catch (err) {
+      console.error('[WeeklyPlan] toggleModule failed:', err);
+    } finally {
+      setToggling((prev) => {
+        const next = new Set(prev);
+        next.delete(moduleNumber);
+        return next;
       });
     }
   };
@@ -135,8 +177,9 @@ export default function WeeklyPlan() {
                   }`}
                 >
                   <button
-                    onClick={() => handleToggleModule(mod.module_number)}
-                    className="flex-shrink-0"
+                    onClick={() => void handleToggleModule(mod.module_number)}
+                    disabled={toggling.has(mod.module_number)}
+                    className={`flex-shrink-0 transition-opacity ${toggling.has(mod.module_number) ? 'opacity-50 cursor-wait' : ''}`}
                     aria-label={done ? 'Marcar como pendiente' : 'Marcar como completado'}
                   >
                     {done ? (
@@ -172,8 +215,9 @@ export default function WeeklyPlan() {
                     </span>
                     {!done && (
                       <button
-                        onClick={() => handleToggleModule(mod.module_number)}
-                        className="w-7 h-7 bg-indigo-500 hover:bg-indigo-600 rounded-lg flex items-center justify-center transition-colors"
+                        onClick={() => void handleToggleModule(mod.module_number)}
+                        disabled={toggling.has(mod.module_number)}
+                        className="w-7 h-7 bg-indigo-500 hover:bg-indigo-600 rounded-lg flex items-center justify-center transition-colors disabled:opacity-50"
                         aria-label="Iniciar módulo"
                       >
                         <Play className="w-3.5 h-3.5 text-white ml-0.5" />

@@ -7,9 +7,9 @@ import {
   BookOpen,
   Settings,
   LogOut,
-  GraduationCap,
 } from 'lucide-react';
 import { useState } from 'react';
+import logoSoftserve from '../assets/logo_softserve.jpeg';
 
 export type TabId = 'dashboard' | 'calendario' | 'objetivos' | 'quiz' | 'recursos' | 'coach' | 'ajustes';
 
@@ -49,9 +49,7 @@ export default function Sidebar({ activeTab, onChange, userName, userEmail, onLo
     <>
       <aside className="w-64 bg-slate-900 text-white flex flex-col min-h-screen">
         <div className="p-6 flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center">
-            <GraduationCap className="w-6 h-6" />
-          </div>
+          <img src={logoSoftserve} alt="SoftServe" className="w-10 h-10 rounded-xl object-cover" />
           <div>
             <h1 className="text-lg font-bold leading-tight">CoachApp</h1>
             <p className="text-xs text-slate-400">Tu coach de aprendizaje</p>
@@ -80,6 +78,18 @@ export default function Sidebar({ activeTab, onChange, userName, userEmail, onLo
             })}
           </ul>
         </nav>
+
+        <div className="px-4 pb-2">
+          <a
+            href="https://www.softserveinc.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-xs text-slate-400 hover:text-white transition-colors"
+          >
+            <img src={logoSoftserve} alt="SoftServe" className="w-5 h-5 rounded object-cover" />
+            softserveinc.com
+          </a>
+        </div>
 
         <div className="p-4 mx-3 mb-3 bg-slate-800 rounded-xl">
           <div className="flex items-center gap-3">

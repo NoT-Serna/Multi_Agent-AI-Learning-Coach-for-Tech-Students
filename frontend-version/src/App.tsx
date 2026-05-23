@@ -47,9 +47,10 @@ const titles: Record<TabId, string> = {
 
 interface DashboardViewProps {
   createdAt: string | null;
+  onNavigate: (tab: TabId) => void;
 }
 
-function DashboardView({ createdAt }: DashboardViewProps) {
+function DashboardView({ createdAt, onNavigate }: DashboardViewProps) {
   const { session } = useAgentSession();
   const uid = getAuth().currentUser?.uid ?? null;
 
@@ -91,6 +92,7 @@ function DashboardView({ createdAt }: DashboardViewProps) {
             completedWeeks={session.completedWeeks}
             completedModulesByWeek={completedModulesByWeek}
             createdAt={createdAt}
+            onNavigate={onNavigate}
           />
         </div>
       </div>
@@ -286,7 +288,7 @@ export default function App() {
       student_name:     `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
       user_background:  userBackground,
       user_preferences: userPreferences,
-      student_id:       String(sesion.usuario.id),
+      student_id:       getAuth().currentUser?.uid ?? String(sesion.usuario.id),
     });
   }, [sesion, session.sessionId, session.hydrating, session.diagnosticComplete, startSession]);
 
@@ -390,10 +392,10 @@ export default function App() {
                 .map((c) => c.titulo)
                 .join(', ') || 'Sin cursos seleccionados';
               startSession({
-                student_name:    `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
-                user_background: userBackground,
+                student_name:     `${sesion.usuario.nombre} ${sesion.usuario.apellido}`,
+                user_background:  userBackground,
                 user_preferences: (sesion.usuario.intereses as readonly string[]).join(', ') || 'Sin preferencias',
-                student_id:      String(sesion.usuario.id),
+                student_id:       getAuth().currentUser?.uid ?? String(sesion.usuario.id),
               });
             }}
             className="mt-4 px-5 py-2 text-sm font-medium bg-indigo-500 text-white rounded-lg hover:bg-indigo-600"
@@ -476,9 +478,9 @@ export default function App() {
         <Header title={titles[tab]} />
 
         <main className="flex-1 p-6 overflow-y-auto">
-          {tab === 'dashboard'  && <DashboardView createdAt={createdAt} />}
+          {tab === 'dashboard'  && <DashboardView createdAt={createdAt} onNavigate={setTab} />}
           {tab === 'calendario' && <CalendarioPage />}
-          {tab === 'objetivos'  && <ObjetivosPage />}
+          {tab === 'objetivos'  && <ObjetivosPage onNavigate={setTab} />}
           {tab === 'quiz'       && <QuizPage onNavigate={setTab} />}
           {tab === 'recursos'   && <RecursosPage />}
           {tab === 'coach'      && <CoachIAPage onNavigate={setTab} />}

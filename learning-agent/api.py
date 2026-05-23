@@ -13,6 +13,8 @@ import os
 import sys
 import uuid
 import logging
+from datetime import date, timedelta
+from typing import List
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -84,6 +86,43 @@ api.add_middleware(
 # ── In-memory session store (keyed by session_id) ─────────────────────────────
 # Each value is the latest AgentState snapshot for that session.
 _sessions: dict[str, dict] = {}
+
+
+# ── Calendar reschedule helper ────────────────────────────────────────────────
+
+def _reschedule_pending_weeks(
+    events: List[dict],
+    completed_weeks: List[int],
+    current_week: int,
+) -> List[dict]:
+    """
+    Recalculate dates for pending weeks so that `current_week` starts today.
+    Completed weeks keep their original dates and completed=True flags.
+    Day offsets within each week follow the schedule_agent convention:
+      module 1 study: day 0, review: day 1
+      module 2 study: day 2, review: day 3
+      module 3 study: day 4, review: day 5
+      quiz (moduleNumber=0): day 6
+    """
+    tomorrow = date.today() + timedelta(days=1)
+    rescheduled = []
+    for event in events:
+        week_num = event.get("week", 0)
+        if week_num in completed_weeks:
+            rescheduled.append(event)
+            continue
+        module_number = event.get("moduleNumber", 0)
+        event_type    = event.get("type", "study")
+        if module_number == 0:
+            day_offset = 6
+        elif event_type == "study":
+            day_offset = (module_number - 1) * 2
+        else:
+            day_offset = (module_number - 1) * 2 + 1
+        week_offset = week_num - current_week   # 0 for current week, 1 for next…
+        new_date = tomorrow + timedelta(weeks=week_offset, days=day_offset)
+        rescheduled.append({**event, "date": new_date.isoformat(), "completed": False})
+    return rescheduled
 
 # Firestore collection that maps session_id → Firebase UID.
 # Written on every new session; queried when restoring after a server restart.
@@ -290,21 +329,33 @@ class QuizSubmitResponse(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    # Firebase UID — required for chatbot to write calendar/roadmap changes to Firestore.
+    uid: str | None = None
     # Optional learning context — used when the session is not in the in-memory
     # store (e.g. after a server restart). The chatbot only needs these fields
     # to generate a contextualised response; it does not need the full LangGraph
     # state.
     student_name: str | None = None
+    user_preferences: str | None = None
+    user_background: str | None = None
     learning_roadmap: list[dict] | None = None
     skill_scores: dict[str, float] | None = None
     strong_skills: list[str] | None = None
     weak_skills: list[str] | None = None
     current_week: int | None = None
     completed_weeks: list[int] | None = None
+    quiz_scores: dict[str, float] | None = None
+    study_calendar: list[dict] | None = None
+    # Frontend quiz-mode flag: True only while the user is actively answering
+    # the quiz (Start Quiz clicked, not yet submitted).  Used to override the
+    # backend's _is_quiz_mode() check which can be overly aggressive.
+    in_quiz_mode: bool | None = None
 
 
 class ChatResponse(BaseModel):
     response: str
+    updated_calendar: list[dict] | None = None
+    updated_roadmap: list[dict] | None = None
 
 
 class SessionStateResponse(BaseModel):
@@ -474,80 +525,110 @@ def submit_quiz(req: QuizSubmitRequest):
     state  = _get_session(req.session_id, req.user_id)
     config = _langgraph_config(req.session_id)
 
-    # Verify the checkpoint is paused at the quiz interrupt. It may not be if:
-    # - The server restarted and the checkpoint rebuild in _try_restore_session failed.
-    # - A previous invoke() crashed partway through and left the graph in a bad state.
-    # If the checkpoint is missing or wrong, reposition it as if generate_quiz just ran
-    # (no LLM calls — the graph pauses immediately at interrupt_before evaluate_quiz_answers).
-    try:
-        graph_state = langgraph_app.get_state(config)
-        at_quiz_interrupt = bool(
-            graph_state.next and "evaluate_quiz_answers" in graph_state.next
-        )
-    except Exception:
-        at_quiz_interrupt = False
-
-    if at_quiz_interrupt:
-        # Normal path: checkpoint is correctly positioned, inject answers and resume.
-        langgraph_app.update_state(config, {"quiz_answers": req.answers})
-    else:
-        # Rebuild path: update_state(as_node="generate_quiz") positions the checkpoint
-        # as if generate_quiz just ran — the graph is already paused at the
-        # interrupt_before evaluate_quiz_answers boundary, no invoke needed to get there.
-        logger.info(
-            f"[submit_quiz] Checkpoint for session {req.session_id} is not at "
-            f"evaluate_quiz_answers (next={getattr(langgraph_app.get_state(config), 'next', None)}). "
-            "Rebuilding checkpoint."
-        )
-        langgraph_app.update_state(config, state, as_node="generate_quiz")
-        langgraph_app.update_state(config, {"quiz_answers": req.answers})
+    # Always reposition the checkpoint as if generate_quiz just ran and inject the
+    # submitted answers in a single update_state call.  Using as_node="generate_quiz"
+    # guarantees that (a) the graph pauses at interrupt_before evaluate_quiz_answers
+    # and (b) quiz_answers is present in the state the node receives.
+    # A plain update_state without as_node does not reliably deliver the answers to
+    # the next node, so we use this single-call pattern in all cases.
+    logger.info(
+        f"[submit_quiz] Positioning checkpoint for session {req.session_id} "
+        f"with {len(req.answers)} answers: {req.answers}"
+    )
+    langgraph_app.update_state(
+        config,
+        {**state, "quiz_answers": req.answers},
+        as_node="generate_quiz",
+    )
 
     state = langgraph_app.invoke(None, config=config)
     _sessions[req.session_id] = state
 
     next_step    = state.get("next_step", "")
     quiz_scores  = state.get("quiz_scores", {})
-    current_week = state.get("current_week", 1)
+    current_week = state.get("current_week") or 1
 
     # Score is stored under the quiz week that was just evaluated.
     # current_quiz_week is set by generate_quiz to the week BEFORE current_week advances.
     week_key = f"week_{state.get('current_quiz_week', current_week)}"
     score    = quiz_scores.get(week_key, 0.0)
 
-    # After passing, pre-generate quiz questions for the next week so that
-    # the frontend immediately shows fresh questions instead of repeating week N.
-    # Also repositions the checkpoint so the next submit_quiz takes the normal path.
-    quiz_questions = state.get("quiz_questions", [])
+    # Pre-generate quiz questions eagerly so the frontend gets fresh questions
+    # without a second round-trip, and reposition the checkpoint for the next submit.
+    quiz_questions      = state.get("quiz_questions", [])
+    response_quiz_passed  = state.get("quiz_passed")
+    response_quiz_scores  = quiz_scores
+    response_quiz_questions = quiz_questions
+    response_study_calendar = state.get("study_calendar", [])
+
     if next_step == "next_week" and current_week <= 4:
+        # Passed → pre-generate questions for the upcoming week.
         try:
-            next_quiz_state  = _generate_quiz_node(state)
-            quiz_questions   = next_quiz_state.get("quiz_questions", quiz_questions)
+            next_quiz_state     = _generate_quiz_node(state)
+            response_quiz_questions = next_quiz_state.get("quiz_questions", quiz_questions)
             pre_state = {
                 **state,
-                "quiz_questions":    quiz_questions,
+                "quiz_questions":    response_quiz_questions,
                 "quiz_answers":      [],
                 "quiz_passed":       None,
                 "next_step":         "await_quiz_answers",
                 "current_quiz_week": current_week,   # now the next week
             }
+
+            # Reschedule remaining weeks so the new current week starts today.
+            existing_calendar    = state.get("study_calendar", [])
+            completed_weeks_list = state.get("completed_weeks", [])
+            if existing_calendar:
+                rescheduled = _reschedule_pending_weeks(
+                    existing_calendar, completed_weeks_list, current_week
+                )
+                response_study_calendar = rescheduled
+                pre_state["study_calendar"] = rescheduled
+                logger.info(
+                    f"[submit_quiz] Rescheduled calendar: week {current_week} starts today."
+                )
+
             _sessions[req.session_id] = pre_state
             langgraph_app.update_state(config, pre_state, as_node="generate_quiz")
             logger.info(f"[submit_quiz] Pre-generated week {current_week} quiz questions.")
         except Exception as e:
-            logger.warning(
-                f"[submit_quiz] Pre-generating week {current_week} quiz failed: {e}"
+            logger.warning(f"[submit_quiz] Pre-generating week {current_week} quiz failed: {e}")
+
+    elif next_step == "retry_quiz":
+        # Failed but attempts remain → generate fresh questions for the same week
+        # and wipe the failed attempt's score so the next attempt starts clean.
+        try:
+            retry_quiz_state    = _generate_quiz_node(state)
+            response_quiz_questions = retry_quiz_state.get("quiz_questions", quiz_questions)
+            response_quiz_scores  = {k: v for k, v in quiz_scores.items() if k != week_key}
+            response_quiz_passed  = None  # reset so the frontend treats it as a fresh start
+            pre_state = {
+                **state,
+                "quiz_questions":    response_quiz_questions,
+                "quiz_answers":      [],
+                "quiz_passed":       None,
+                "quiz_scores":       response_quiz_scores,
+                "next_step":         "await_quiz_answers",
+            }
+            _sessions[req.session_id] = pre_state
+            langgraph_app.update_state(config, pre_state, as_node="generate_quiz")
+            logger.info(
+                f"[submit_quiz] Generated fresh retry quiz for week "
+                f"{state.get('current_quiz_week', current_week)}."
             )
+        except Exception as e:
+            logger.warning(f"[submit_quiz] Generating retry quiz failed: {e}")
 
     return QuizSubmitResponse(
-        quiz_passed     = state.get("quiz_passed"),
+        quiz_passed     = response_quiz_passed,
         score           = score,
         next_step       = next_step,
         current_week    = current_week,
         completed_weeks = state.get("completed_weeks",  []),
-        quiz_scores     = quiz_scores,
+        quiz_scores     = response_quiz_scores,
         learning_roadmap= state.get("learning_roadmap", []),
-        study_calendar  = state.get("study_calendar",   []),
-        quiz_questions  = quiz_questions,
+        study_calendar  = response_study_calendar,
+        quiz_questions  = response_quiz_questions,
         message         = _last_ai_message(state),
     )
 
@@ -562,27 +643,53 @@ def chat(req: ChatRequest):
     restart), the endpoint falls back to the learning context fields supplied
     directly in the request body so the chatbot can still respond correctly.
     """
-    # Try to get the full LangGraph state; fall back to a lightweight context
-    # built from the fields the caller sent when the session is missing.
+    # 1. Try in-memory store first (fastest path).
     state = _sessions.get(req.session_id)
 
+    # 2. If not in memory (e.g. after a server restart), try to reconstruct from
+    #    Firestore so the chatbot has the full session context (roadmap, scores…).
     if state is None:
-        # Build a minimal state from the context the frontend already has.
-        # The chatbot agent only reads the fields below — it does not need the
-        # full LangGraph graph state to generate a response.
+        state = _try_restore_session(req.session_id, req.uid)
+
+    # 3. Last-resort fallback: build a minimal state from the context the frontend
+    #    sent in the request body.  quiz_questions and next_step are left empty/None
+    #    so _is_quiz_mode() does not incorrectly block the chatbot.
+    if state is None:
         state = {
-            "student_name":    req.student_name or "",
+            "student_name":     req.student_name or "",
+            "user_preferences": req.user_preferences or "",
+            "user_background":  req.user_background or "",
             "learning_roadmap": req.learning_roadmap or [],
-            "skill_scores":    req.skill_scores or {},
-            "strong_skills":   req.strong_skills or [],
-            "weak_skills":     req.weak_skills or [],
-            "current_week":    req.current_week,
-            "completed_weeks": req.completed_weeks or [],
-            "quiz_questions":  [],
-            "quiz_passed":     None,
-            "next_step":       None,
-            "messages":        [],
+            "skill_scores":     req.skill_scores or {},
+            "strong_skills":    req.strong_skills or [],
+            "weak_skills":      req.weak_skills or [],
+            "current_week":     req.current_week,
+            "completed_weeks":  req.completed_weeks or [],
+            "quiz_scores":      req.quiz_scores or {},
+            "study_calendar":   req.study_calendar or [],
+            "quiz_questions":   [],
+            "quiz_passed":      None,
+            "next_step":        None,
+            "messages":         [],
         }
+    else:
+        # State found (in memory or restored from Firestore).
+        # If the stored roadmap is empty but the frontend sent a populated one
+        # (e.g. the LLM returned bad JSON during generate_roadmap), use the
+        # frontend's version so the chatbot doesn't say "no plan yet".
+        if req.learning_roadmap and not state.get("learning_roadmap"):
+            state = {**state, "learning_roadmap": req.learning_roadmap}
+
+    # Inject the Firebase UID so the chatbot can write calendar changes to Firestore.
+    # Also pass the frontend's in_quiz_mode flag so the chatbot uses the authoritative
+    # client-side value instead of the backend's over-aggressive _is_quiz_mode() check.
+    overlay: dict = {}
+    if req.uid:
+        overlay["_chat_uid"] = req.uid
+    if req.in_quiz_mode is not None:
+        overlay["in_quiz_mode"] = req.in_quiz_mode
+    if overlay:
+        state = {**state, **overlay}
 
     # Add the user message to the state's message history
     current_messages = list(state.get("messages", []))
@@ -592,10 +699,24 @@ def chat(req: ChatRequest):
     # Invoke chatbot directly (not through the main graph)
     result = chatbot_agent(state)
 
-    # Persist updated message history back into the in-memory store
-    _sessions[req.session_id] = {**state, "messages": result["messages"]}
+    # Extract any modification results so the frontend can update its local state.
+    updated_calendar = result.get("study_calendar") if result.get("_chat_modified_calendar") else None
+    updated_roadmap  = result.get("learning_roadmap") if result.get("_chat_modified_roadmap") else None
 
-    return ChatResponse(response=result["messages"][-1].content)
+    # Persist updated state back into the in-memory store
+    updated_state = {
+        **state,
+        "messages": result["messages"],
+        **({"study_calendar": updated_calendar} if updated_calendar is not None else {}),
+        **({"learning_roadmap": updated_roadmap} if updated_roadmap is not None else {}),
+    }
+    _sessions[req.session_id] = updated_state
+
+    return ChatResponse(
+        response=result["messages"][-1].content,
+        updated_calendar=updated_calendar,
+        updated_roadmap=updated_roadmap,
+    )
 
 
 @api.get("/session/{session_id}", response_model=SessionStateResponse)

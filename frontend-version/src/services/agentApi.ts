@@ -131,13 +131,19 @@ export const agentApi = {
   chat(params: {
     session_id: string;
     message: string;
+    uid?: string;
     student_name?: string;
+    user_preferences?: string;
+    user_background?: string;
     learning_roadmap?: unknown[];
     skill_scores?: Record<string, number>;
     strong_skills?: string[];
     weak_skills?: string[];
     current_week?: number;
     completed_weeks?: number[];
+    quiz_scores?: Record<string, number>;
+    study_calendar?: unknown[];
+    in_quiz_mode?: boolean;
   }): Promise<ChatResponse> {
     return request('POST', '/chat', params, AI_TIMEOUT_MS);
   },

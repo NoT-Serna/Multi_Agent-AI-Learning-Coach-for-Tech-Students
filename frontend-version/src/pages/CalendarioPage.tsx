@@ -45,6 +45,7 @@ export default function CalendarioPage() {
 
   const { session } = useAgentSession();
   const { events, loading, error, retry } = useStudyCalendar(session.diagnosticComplete);
+  const completedWeeks = session.completedWeeks;
 
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
@@ -55,6 +56,11 @@ export default function CalendarioPage() {
     `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
   const eventsForDay = (d: number) => events.filter((e) => e.date === dateStr(d));
+
+  const isDayFromCompletedWeek = (d: number) => {
+    const dayEvts = eventsForDay(d);
+    return dayEvts.length > 0 && dayEvts.every((e) => completedWeeks.includes(e.week));
+  };
   const selectedEvents = eventsForDay(selectedDay);
 
   const legend: CalendarEvent['type'][] = ['study', 'deadline', 'review'];
@@ -199,6 +205,7 @@ export default function CalendarioPage() {
               const day = i + 1;
               const dayEvents = eventsForDay(day);
               const isSelected = day === selectedDay;
+              const isPast = isDayFromCompletedWeek(day);
               const isToday =
                 day === today.getDate() &&
                 month === today.getMonth() &&
@@ -211,27 +218,36 @@ export default function CalendarioPage() {
                   className={`min-h-[72px] text-left p-2 rounded-lg border transition-colors ${
                     isSelected
                       ? 'bg-indigo-500 text-white border-indigo-500'
+                      : isPast
+                      ? 'border-slate-100 bg-slate-50 text-slate-400'
                       : isToday
                       ? 'border-indigo-300 bg-indigo-50 text-slate-700'
                       : 'border-slate-100 hover:bg-slate-50 text-slate-700'
                   }`}
                 >
-                  <div className={`text-sm font-semibold ${isToday && !isSelected ? 'text-indigo-600' : ''}`}>
+                  <div className={`text-sm font-semibold ${isToday && !isSelected && !isPast ? 'text-indigo-600' : ''}`}>
                     {day}
                   </div>
                   <div className="mt-1 space-y-0.5">
-                    {dayEvents.slice(0, 2).map((e) => (
-                      <div
-                        key={e.id}
-                        className={`text-[10px] truncate px-1 py-0.5 rounded ${
-                          isSelected
-                            ? 'bg-white/20 text-white'
-                            : `${eventTypeStyles[e.type].bg} ${eventTypeStyles[e.type].border} border ${e.completed ? 'opacity-50 line-through' : ''}`
-                        }`}
-                      >
-                        {e.title}
-                      </div>
-                    ))}
+                    {dayEvents.slice(0, 2).map((e) => {
+                      const isEventPast = completedWeeks.includes(e.week);
+                      return (
+                        <div
+                          key={e.id}
+                          className={`text-[10px] truncate px-1 py-0.5 rounded ${
+                            isSelected
+                              ? 'bg-white/20 text-white'
+                              : isEventPast
+                              ? 'bg-slate-100 border-slate-200 border text-slate-400 line-through'
+                              : e.completed
+                              ? 'bg-green-100 border-green-300 border text-green-700 line-through'
+                              : `${eventTypeStyles[e.type].bg} ${eventTypeStyles[e.type].border} border`
+                          }`}
+                        >
+                          {e.title}
+                        </div>
+                      );
+                    })}
                     {dayEvents.length > 2 && (
                       <div className={`text-[10px] ${isSelected ? 'text-white/80' : 'text-slate-400'}`}>
                         +{dayEvents.length - 2}
@@ -258,34 +274,47 @@ export default function CalendarioPage() {
             {selectedEvents.map((e) => {
               const style = eventTypeStyles[e.type];
               const Icon = style.icon;
+              const isPastWeek = completedWeeks.includes(e.week);
               return (
                 <div
                   key={e.id}
-                  className={`rounded-lg border ${style.border} ${style.bg} ${e.completed ? 'opacity-60' : ''}`}
+                  className={`rounded-lg border ${
+                    isPastWeek
+                      ? 'border-slate-200 bg-slate-50'
+                      : e.completed
+                      ? 'border-green-300 bg-green-50'
+                      : `${style.border} ${style.bg}`
+                  }`}
                 >
                   {/* Cabecera del evento */}
                   <div className="flex items-start gap-2 p-3">
-                    <Icon className="w-4 h-4 mt-0.5 text-slate-700 flex-shrink-0" />
+                    <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isPastWeek ? 'text-slate-400' : e.completed ? 'text-green-600' : 'text-slate-700'}`} />
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-semibold text-slate-800 ${e.completed ? 'line-through' : ''}`}>
+                      <p className={`text-sm font-semibold ${isPastWeek ? 'text-slate-400 line-through' : e.completed ? 'text-green-700 line-through' : 'text-slate-800'}`}>
                         {e.title}
                       </p>
+                      {isPastWeek && (
+                        <p className="text-xs text-slate-400 font-medium mt-0.5">Semana completada</p>
+                      )}
+                      {!isPastWeek && e.completed && (
+                        <p className="text-xs text-green-600 font-semibold mt-0.5">✓ Completado</p>
+                      )}
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <span className="text-xs text-slate-500">{e.time} · {style.label}</span>
+                        <span className="text-xs text-slate-400">{e.time} · {style.label}</span>
                         {e.difficulty && (
-                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-white/60 border border-current text-slate-500">
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-white/60 border border-current text-slate-400">
                             {e.difficulty}
                           </span>
                         )}
                         {e.duration_minutes && (
-                          <span className="flex items-center gap-0.5 text-xs text-slate-500">
+                          <span className="flex items-center gap-0.5 text-xs text-slate-400">
                             <Clock className="w-3 h-3" />
                             {e.duration_minutes} min
                           </span>
                         )}
                       </div>
                     </div>
-                    {e.type === 'study' && !e.completed && (
+                    {!isPastWeek && e.type === 'study' && !e.completed && (
                       <button
                         onClick={() => handleMarkCompleted(e.id)}
                         className="flex-shrink-0 text-slate-400 hover:text-indigo-500 transition-colors"
@@ -295,7 +324,7 @@ export default function CalendarioPage() {
                         <CheckCircle className="w-4 h-4" />
                       </button>
                     )}
-                    {e.completed && (
+                    {!isPastWeek && e.completed && (
                       <CheckCircle className="w-4 h-4 flex-shrink-0 text-green-500" />
                     )}
                   </div>

@@ -31,6 +31,8 @@ export interface AgentSession {
   // Session identity
   sessionId: string | null;
   studentName: string | null;
+  userPreferences: string | null;
+  userBackground: string | null;
 
   // Diagnostic
   diagnosticQuestions: DiagnosticQuestion[];
@@ -108,6 +110,8 @@ interface AgentSessionContextValue {
 const emptySession: AgentSession = {
   sessionId:            null,
   studentName:          null,
+  userPreferences:      null,
+  userBackground:       null,
   diagnosticQuestions:  [],
   diagnosticComplete:   false,
   skillScores:          {},
@@ -159,6 +163,8 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         ...s,
         sessionId:           res.session_id,
         studentName:         params.student_name,
+        userPreferences:     params.user_preferences,
+        userBackground:      params.user_background,
         diagnosticQuestions: res.diagnostic_questions,
         loading:             false,
         error:               null,
@@ -198,19 +204,9 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         error:               null,
       }));
 
-      // Persist the study calendar to Firestore so CalendarioPage can read it.
-      // Import is deferred to avoid a circular dependency at module load time.
-      if (res.study_calendar && res.study_calendar.length > 0) {
-        const { auth } = await import('../services/firebase');
-        const { saveStudyCalendar } = await import('../services/calendarService');
-        const uid = auth.currentUser?.uid;
-        if (uid) {
-          // Fire-and-forget — don't block the UI on this write.
-          saveStudyCalendar(uid, res.study_calendar, []).catch((err) => {
-            console.error('[submitDiagnostic] saveStudyCalendar failed:', err);
-          });
-        }
-      }
+      // The backend's generate_schedule already writes the calendar to Firestore.
+      // The onSnapshot listener in useStudyCalendar picks it up automatically.
+      // A second write here would race with the backend's write and cause duplicates.
 
       return res;
     } catch (err) {
@@ -240,9 +236,12 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
       // for the next week and resets quiz_passed to null in the state snapshot.
       const actuallyPassed =
         res.next_step === 'next_week' || res.next_step === 'completed';
+      // On retry the backend returns quiz_passed=null and clears the failed score
+      // so the next attempt starts completely fresh.
+      const isRetry = res.next_step === 'retry_quiz';
       setSession((s) => ({
         ...s,
-        quizPassed:      actuallyPassed ? true : (res.quiz_passed ?? false),
+        quizPassed:      isRetry ? null : actuallyPassed ? true : (res.quiz_passed ?? false),
         quizScores:      res.quiz_scores,
         currentWeek:     res.current_week,
         completedWeeks:  res.completed_weeks,
@@ -252,8 +251,11 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         error:           null,
       }));
 
-      // Persist the updated study calendar to Firestore after each quiz.
-      if (res.study_calendar && res.study_calendar.length > 0) {
+      // Only persist the calendar when the quiz passed and the backend rescheduled
+      // pending weeks in memory (next_week). For adjust_roadmap the backend's
+      // generate_schedule already wrote to Firestore; writing again would cause
+      // duplicates. For retry_quiz the calendar is unchanged.
+      if (res.next_step === 'next_week' && res.study_calendar && res.study_calendar.length > 0) {
         const { auth } = await import('../services/firebase');
         const { saveStudyCalendar } = await import('../services/calendarService');
         const uid = auth.currentUser?.uid;
@@ -275,24 +277,42 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
   const chat = useCallback(async (message: string): Promise<string> => {
     if (!session.sessionId) return 'No hay sesión activa. Completa el registro primero.';
     try {
+      const { auth } = await import('../services/firebase');
+      const uid = auth.currentUser?.uid;
       const res = await agentApi.chat({
-        session_id:      session.sessionId,
+        session_id:       session.sessionId,
         message,
+        uid,
         // Pass the learning context so the backend can respond even after a
         // server restart (when the in-memory session is gone).
-        student_name:    session.studentName ?? undefined,
+        student_name:     session.studentName ?? undefined,
+        user_preferences: session.userPreferences ?? undefined,
+        user_background:  session.userBackground ?? undefined,
         learning_roadmap: session.learningRoadmap,
-        skill_scores:    session.skillScores,
-        strong_skills:   session.strongSkills,
-        weak_skills:     session.weakSkills,
-        current_week:    session.currentWeek,
-        completed_weeks: session.completedWeeks,
+        skill_scores:     session.skillScores,
+        strong_skills:    session.strongSkills,
+        weak_skills:      session.weakSkills,
+        current_week:     session.currentWeek,
+        completed_weeks:  session.completedWeeks,
+        quiz_scores:      session.quizScores,
+        // Let the backend know whether the user is actively answering a quiz.
+        // This overrides the backend's own _is_quiz_mode() which is too aggressive
+        // (it blocks chat even before the user clicks "Start Quiz").
+        in_quiz_mode:     session.inQuizMode,
       });
+
+      // If the chatbot modified the roadmap, update the local session state.
+      // Calendar changes are handled by the backend writing to Firestore, which
+      // triggers the onSnapshot listener in useStudyCalendar automatically.
+      if (res.updated_roadmap && res.updated_roadmap.length > 0) {
+        setSession((s) => ({ ...s, learningRoadmap: res.updated_roadmap! }));
+      }
+
       return res.response;
     } catch (err) {
       return `Error al contactar al coach: ${(err as Error).message}`;
     }
-  }, [session.sessionId, session.studentName, session.learningRoadmap, session.skillScores, session.strongSkills, session.weakSkills, session.currentWeek, session.completedWeeks]);
+  }, [session.sessionId, session.studentName, session.userPreferences, session.userBackground, session.learningRoadmap, session.skillScores, session.strongSkills, session.weakSkills, session.currentWeek, session.completedWeeks, session.quizScores, session.inQuizMode]);
 
   // ── clearError ──────────────────────────────────────────────────────────────
   const clearError = useCallback(() => {

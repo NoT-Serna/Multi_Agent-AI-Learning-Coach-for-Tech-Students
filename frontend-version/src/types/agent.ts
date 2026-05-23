@@ -88,6 +88,8 @@ export interface QuizSubmitResponse {
 
 export interface ChatResponse {
   response: string;
+  updated_calendar?: CalendarEventPayload[];
+  updated_roadmap?: RoadmapWeek[];
 }
 
 export interface SessionState {
