@@ -190,6 +190,22 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         answers,
         user_id: auth.currentUser?.uid,
       });
+      // Save the calendar to Firestore from the frontend. The backend's
+      // generate_schedule also writes it, but that write can fail silently
+      // (missing serviceAccountKey, Firebase Admin not initialised, etc.).
+      // Writing here guarantees the onSnapshot listener in useStudyCalendar
+      // always has data. saveStudyCalendar deletes+rewrites atomically so
+      // there are no duplicates even if the backend write succeeded first.
+      if (res.study_calendar && res.study_calendar.length > 0) {
+        const uid = auth.currentUser?.uid;
+        if (uid) {
+          const { saveStudyCalendar } = await import('../services/calendarService');
+          saveStudyCalendar(uid, res.study_calendar, []).catch((err) => {
+            console.error('[submitDiagnostic] saveStudyCalendar failed:', err);
+          });
+        }
+      }
+
       setSession((s) => ({
         ...s,
         diagnosticComplete:  true,
@@ -203,10 +219,6 @@ export function AgentSessionProvider({ children }: { children: ReactNode }) {
         loading:             false,
         error:               null,
       }));
-
-      // The backend's generate_schedule already writes the calendar to Firestore.
-      // The onSnapshot listener in useStudyCalendar picks it up automatically.
-      // A second write here would race with the backend's write and cause duplicates.
 
       return res;
     } catch (err) {

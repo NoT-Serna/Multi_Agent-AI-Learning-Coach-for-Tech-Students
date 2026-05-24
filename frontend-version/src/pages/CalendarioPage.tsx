@@ -125,11 +125,22 @@ export default function CalendarioPage() {
       <div className="flex flex-col items-center justify-center h-64 gap-3 text-slate-400">
         <CalendarX className="w-10 h-10" />
         <p className="text-sm font-medium text-slate-600">
-          Completa el diagnóstico para generar tu calendario
+          {session.diagnosticComplete
+            ? 'Generando tu calendario… si tarda, recarga la página.'
+            : 'Completa el diagnóstico para generar tu calendario'}
         </p>
         <p className="text-xs text-slate-400">
           Una vez que el agente genere tu plan de estudio, verás aquí tus sesiones diarias.
         </p>
+        {session.diagnosticComplete && (
+          <button
+            onClick={retry}
+            className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium mt-1"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Reintentar
+          </button>
+        )}
       </div>
     );
   }
