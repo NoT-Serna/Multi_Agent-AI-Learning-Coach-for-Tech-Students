@@ -18,6 +18,7 @@ def build_llm():
         model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         temperature=0,
         num_ctx=8192,
+        timeout=300,        # 5-minute per-call timeout; prevents infinite hangs when Ollama is slow/down
         callbacks=callbacks,
     )
     return llm, llm.bind(format="json")
