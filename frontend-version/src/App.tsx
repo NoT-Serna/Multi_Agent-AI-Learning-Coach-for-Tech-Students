@@ -411,20 +411,6 @@ export default function App() {
   if (session.diagnosticQuestions.length > 0 && !session.diagnosticComplete) {
     return (
       <div className="flex min-h-screen bg-slate-50">
-        <Sidebar
-          activeTab={tab}
-          onChange={setTab}
-          userName={`${sesion.usuario.nombre} ${sesion.usuario.apellido}`.trim()}
-          userEmail={sesion.usuario.cuenta}
-          onLogout={async () => {
-            resetChatHistory();
-            resetSession();
-            startSessionFiredRef.current = false;
-            freshSignUpRef.current = false;
-            await cerrarSesion();
-            setSesion(null);
-          }}
-        />
         <div className="flex-1 flex flex-col overflow-y-auto">
           <DiagnosticPage />
         </div>
