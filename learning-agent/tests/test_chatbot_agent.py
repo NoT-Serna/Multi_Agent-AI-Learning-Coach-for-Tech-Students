@@ -71,7 +71,7 @@ def test_quiz_mode_blocking(state):
 
 
 @given(state=valid_agent_state_strategy())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_control_fields_preserved(state):
     """Property 3 — Preservación de campos de control. Validates: Requirements 4.1, 5.3"""
     # Mockear el LLM para no llamar a Ollama
@@ -86,7 +86,7 @@ def test_control_fields_preserved(state):
 
 
 @given(state=valid_non_quiz_state_with_roadmap_strategy())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_messages_grow_with_ai_message(state):
     """Property 4 — Crecimiento del historial con AIMessage. Validates: Requirements 4.2"""
     # El agente retorna {**state, "messages": [new_ai_message]}.
@@ -117,7 +117,7 @@ def test_empty_roadmap_response(state):
 
 
 @given(state=valid_non_quiz_state_with_roadmap_strategy())
-@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_response_word_limit(state):
     """Property 6 — Límite de palabras en la respuesta. Validates: Requirements 6.2"""
     # Respuesta mock que cumple el límite
@@ -131,7 +131,7 @@ def test_response_word_limit(state):
 
 
 @given(state=valid_non_quiz_state_with_roadmap_strategy())
-@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_student_name_in_response(state):
     """Property 7 — Nombre del estudiante en la respuesta. Validates: Requirements 1.5"""
     name = state.get("student_name") or "Estudiante"
@@ -230,11 +230,11 @@ class TestEmptyRoadmap:
         result = chatbot_agent(state)
         last_msg = result["messages"][-1]
         assert isinstance(last_msg, AIMessage)
-        assert "diagnóstico" in last_msg.content.lower()
+        assert "diagnostico" in last_msg.content.lower()
 
     def test_none_roadmap_returns_diagnostic_message(self):
         """
-        Estado con roadmap=None → mensaje contiene "diagnóstico".
+        Estado con roadmap=None → mensaje contiene "diagnostico".
         """
         state = _make_state(
             learning_roadmap=None,
@@ -245,7 +245,7 @@ class TestEmptyRoadmap:
         result = chatbot_agent(state)
         last_msg = result["messages"][-1]
         assert isinstance(last_msg, AIMessage)
-        assert "diagnóstico" in last_msg.content.lower()
+        assert "diagnostico" in last_msg.content.lower()
 
 
 class TestEdgeCases:

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from datetime import date as _date
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -51,6 +52,16 @@ _WEEKDAY_ONLY_PATTERNS = (
     "sin fin de semana", "sin fines de semana", "sin sabado", "sin domingo",
     "entre semana", "solo entre semana", "de lunes a viernes",
     "lunes-viernes", "solo dias de semana", "dias habiles",
+    # Variantes con plural y combinaciones
+    "sin sábados", "sin sabados", "sin domingos",
+    "los sábados", "los sabados", "los domingos",
+    "sábados y domingos", "sabados y domingos",
+    "domingos y sábados", "domingos y sabados",
+    "no clases los sábados", "no clases los sabados",
+    "no clases los domingos",
+    "no tener clases los sábados", "no tener clases los sabados",
+    "no tenga clases los sábados", "no tenga clases los sabados",
+    "no tenga clases los domingos",
 )
 
 _RESET_CALENDAR_PATTERNS = (
@@ -132,6 +143,21 @@ def _is_weekday_only_request(text: str) -> bool:
 def _has_current_week_scope(text: str) -> bool:
     lower = text.lower()
     return any(p in lower for p in _CURRENT_WEEK_SCOPE_PATTERNS)
+
+
+_WEEK_NUMBER_WORDS = {"uno": 1, "dos": 2, "tres": 3, "cuatro": 4}
+
+
+def _parse_week_number(text: str) -> int | None:
+    """Extract a specific week number from text like 'semana 1' or 'semana uno'."""
+    lower = text.lower()
+    m = re.search(r"semana\s+(\d+)", lower)
+    if m:
+        return int(m.group(1))
+    for word, num in _WEEK_NUMBER_WORDS.items():
+        if f"semana {word}" in lower:
+            return num
+    return None
 
 
 def _is_extension_request(text: str) -> bool:
@@ -424,16 +450,21 @@ def _annotate_weekdays(events: list) -> list:
     return result
 
 
-def _reschedule_weekends_to_weekdays(events: list) -> list:
+def _reschedule_weekends_to_weekdays(events: list, week_filter: int | None = None) -> list:
     """Move weekend events to adjacent weekdays instead of deleting them.
 
     Saturday → previous Friday (stays in same week period)
     Sunday   → next Monday   (moves to start of next week)
+
+    If week_filter is given, only events of that week number are rescheduled.
     """
     from datetime import timedelta
     result = []
     for event in events:
         e = dict(event)
+        if week_filter is not None and e.get("week") != week_filter:
+            result.append(e)
+            continue
         try:
             d = _date.fromisoformat(e.get("date", ""))
             if d.weekday() == 5:       # Saturday → Friday
@@ -764,7 +795,8 @@ def _handle_calendar_modification(state: AgentState, question: str) -> AgentStat
 
     # ─ Handle weekday-only filter in Python (LLM unreliable for date arithmetic) ─
     if _is_weekday_only_request(question):
-        modified_events = _reschedule_weekends_to_weekdays(current_calendar)
+        week_filter = _parse_week_number(question)
+        modified_events = _reschedule_weekends_to_weekdays(current_calendar, week_filter)
         moved = sum(
             1 for orig, new in zip(current_calendar, modified_events)
             if orig.get("date") != new.get("date")
@@ -774,10 +806,16 @@ def _handle_calendar_modification(state: AgentState, question: str) -> AgentStat
                 _write_calendar_to_firestore(uid, modified_events)
             except Exception as exc:
                 logger.error("Failed to write modified calendar to Firestore: %s", exc)
+        scope_text = f" de la semana {week_filter}" if week_filter is not None else ""
+        if moved == 0:
+            detail = f"No encontre actividades de fin de semana{scope_text} para mover."
+        else:
+            detail = (
+                f"Las actividades de fin de semana{scope_text} han sido reagendadas "
+                f"a dias habiles ({moved} evento(s) movido(s): sabado → viernes, domingo → lunes)."
+            )
         msg = AIMessage(content=(
-            f"Listo, {student_name}. Las actividades de fin de semana han sido reagendadas "
-            f"a dias habiles ({moved} eventos movidos: sabado → viernes, domingo → lunes). "
-            f"Tu calendario mantiene todos los {len(modified_events)} eventos, ahora solo en dias de lunes a viernes.\n\n"
+            f"Listo, {student_name}. {detail}\n\n"
             "Los cambios ya estan reflejados en tu seccion de Calendario."
         ))
         return {
