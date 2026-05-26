@@ -112,6 +112,15 @@ _CURRENT_WEEK_SCOPE_PATTERNS = (
     "solo para esta semana", "esta semana nada mas", "esta semana nomás",
 )
 
+_OFF_TOPIC_PATTERNS = frozenset({
+    "receta", "cocina", "cocinar", "película", "pelicula", "serie", "noticias",
+    "política", "politica", "religion", "religión", "chiste", "broma", "poema",
+    "escríbeme", "escribeme", "redacta", "traduce", "traducir",
+    "letra de canción", "canción", "cancion", "música", "musica",
+    "deporte", "futbol", "fútbol", "clima", "horóscopo", "horoscopo",
+    "astrología", "astrologia", "videojuego", "juego de azar",
+})
+
 
 # ─── Calendar helpers (pure Python — no LLM needed) ───────────────────────────────────────
 
@@ -451,6 +460,21 @@ def _filter_to_weekdays(events: list) -> list:
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────────────────
+
+def _is_off_topic(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in _OFF_TOPIC_PATTERNS)
+
+
+MAX_RESPONSE_CHARS = 2000
+
+
+def _truncate_response(text: str) -> str:
+    if len(text) <= MAX_RESPONSE_CHARS:
+        return text
+    cut = text[:MAX_RESPONSE_CHARS].rfind(".")
+    return (text[:cut + 1] + " [...]") if cut > 200 else text[:MAX_RESPONSE_CHARS] + " [...]"
+
 
 def _is_quiz_mode(state: AgentState) -> bool:
     # If the frontend explicitly sent its in_quiz_mode flag, trust it — the client
@@ -1100,6 +1124,15 @@ def chatbot_agent(state: AgentState) -> AgentState:
         ))
         return {**state, "messages": [msg]}
 
+    # ─ Off-topic filter ──────────────────────────────────────────────────────────
+    if _is_off_topic(question):
+        msg = AIMessage(content=(
+            "Solo puedo ayudarte con temas relacionados a tu aprendizaje tecnológico: "
+            "tu roadmap, calendario, quizzes y dudas de programación. "
+            "¿Tienes alguna pregunta sobre tu plan de estudio?"
+        ))
+        return {**state, "messages": [msg]}
+
     # ─ Detect modification intent ────────────────────────────────────────────────────
     # Python-handled patterns are checked first — they are precise and don't need
     # the LLM keyword filter or the LLM classifier, so they run unconditionally.
@@ -1146,4 +1179,4 @@ def chatbot_agent(state: AgentState) -> AgentState:
         HumanMessage(content=question),
     ])
 
-    return {**state, "messages": [AIMessage(content=response.content)]}
+    return {**state, "messages": [AIMessage(content=_truncate_response(response.content))]}

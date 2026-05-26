@@ -13,6 +13,8 @@ import os
 import sys
 import uuid
 import logging
+import time
+from collections import defaultdict
 from datetime import date, timedelta
 from typing import List
 
@@ -20,7 +22,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -88,6 +90,22 @@ api.add_middleware(
 # ── In-memory session store (keyed by session_id) ─────────────────────────────
 # Each value is the latest AgentState snapshot for that session.
 _sessions: dict[str, dict] = {}
+
+# ── Rate limiting (per-session, in-memory) ────────────────────────────────────
+_rate_limit_store: dict[str, list] = defaultdict(list)
+_RATE_LIMIT_MAX    = 20    # max messages per window
+_RATE_LIMIT_WINDOW = 60.0  # seconds
+
+
+def _check_rate_limit(session_id: str) -> bool:
+    now = time.time()
+    _rate_limit_store[session_id] = [
+        t for t in _rate_limit_store[session_id] if now - t < _RATE_LIMIT_WINDOW
+    ]
+    if len(_rate_limit_store[session_id]) >= _RATE_LIMIT_MAX:
+        return False
+    _rate_limit_store[session_id].append(now)
+    return True
 
 
 # ── Calendar reschedule helper ────────────────────────────────────────────────
@@ -328,9 +346,37 @@ class QuizSubmitResponse(BaseModel):
     message: str
 
 
+_INJECTION_PATTERNS = (
+    "ignore previous instructions",
+    "ignore all previous",
+    "disregard the above",
+    "forget your instructions",
+    "new system prompt",
+    "ignora las instrucciones",
+    "ignora todo lo anterior",
+    "olvida tus instrucciones",
+    "nuevo prompt del sistema",
+    "actúa como", "actua como",
+    "finge que eres", "pretende que eres",
+)
+
+
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("El mensaje no puede estar vacío.")
+        if len(v) > 2000:
+            raise ValueError("El mensaje excede el límite de 2000 caracteres.")
+        lower = v.lower()
+        if any(p in lower for p in _INJECTION_PATTERNS):
+            raise ValueError("Mensaje no permitido.")
+        return v
     # Firebase UID — required for chatbot to write calendar/roadmap changes to Firestore.
     uid: str | None = None
     # Optional learning context — used when the session is not in the in-memory
@@ -645,6 +691,12 @@ def chat(req: ChatRequest):
     restart), the endpoint falls back to the learning context fields supplied
     directly in the request body so the chatbot can still respond correctly.
     """
+    if not _check_rate_limit(req.session_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Demasiadas solicitudes. Espera un momento antes de enviar otro mensaje.",
+        )
+
     # 1. Try in-memory store first (fastest path).
     state = _sessions.get(req.session_id)
 
