@@ -20,6 +20,7 @@ CoachApp es una plataforma educativa personalizada que combina un frontend web m
 ### Frontend
 - **Node.js** v18 o superior
 - **npm** v9 o superior
+- Docker
 
 ### Agente (backend)
 - **Python** 3.10 o superior
@@ -36,77 +37,12 @@ ollama pull llama3.2:3b
 
 ## Ejecución completa del proyecto
 
-El proyecto tiene dos procesos que deben correr en paralelo: el **agente (backend)** y el **frontend**. Abre dos terminales.
+El proyecto tiene dos procesos que deben correr en paralelo: el **agente (backend)** y el **frontend**. 
+En la raíz del directorio realizar **docker-compose up --build** (para versiones diferentes el comando alterno es docker compose up --build)
+Luego de ello se puede visualizar la app por medio de localhost:5173
 
-### Terminal 1 — Agente (FastAPI)
-
-```bash
-# 1. Crear y activar entorno virtual (solo la primera vez)
-python -m venv .venv
-source .venv/bin/activate        # macOS / Linux
-# .venv\Scripts\activate         # Windows
-
-# 2. Instalar dependencias (solo la primera vez)
-pip install -r requirements.txt
-
-# 3. Configurar variables de entorno del agente
-#    Edita learning-agent/.env con los valores correctos (ver sección más abajo)
-
-# 4. Arrancar la API
-cd learning-agent
-uvicorn api:api --host 0.0.0.0 --port 8006 --reload
-```
-
-La API queda disponible en `http://localhost:8006`.  
-Puedes verificar que está activa en `http://localhost:8006/health`.
-
-### Terminal 2 — Frontend (Vite)
-
-```bash
-# 1. Instalar dependencias (solo la primera vez)
-cd frontend-version
-npm install
-
-# 2. Arrancar el servidor de desarrollo
-npm run dev
-```
-
-La app queda disponible en `http://localhost:5173`.
-
----
-
-## Variables de entorno
-
-### Agente — `learning-agent/.env`
-
-```env
-# URL del servidor Ollama (por defecto local)
-OLLAMA_BASE_URL=http://localhost:11434
-
-# Modelo a usar
-OLLAMA_MODEL=llama3.2:3b
-
-# Ruta al archivo de credenciales de Firebase Admin SDK
-FIREBASE_SERVICE_ACCOUNT_PATH=./serviceAccountKey.json
-
-# Observabilidad con Langfuse (opcional — omitir si no se usa)
-LANGFUSE_PUBLIC_KEY=tu_clave_publica
-LANGFUSE_SECRET_KEY=tu_clave_secreta
-```
-
-> El archivo `serviceAccountKey.json` debe colocarse dentro de `learning-agent/`. Se obtiene desde la consola de Firebase → Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada.
-
-### Frontend — `frontend-version/.env.local` (opcional)
-
-Por defecto el frontend apunta al agente en `http://localhost:8006`. Si necesitas cambiar la URL:
-
-```env
-VITE_API_URL=http://localhost:8006
-```
-
-La configuración de Firebase ya está incluida en `src/services/firebase.ts`.
-
----
+-Para apagar los contenedores realizar **docker-compose down**
+-Para encender sin reconstruir las imagenes realizar **docker-compose up**
 
 ## Flujo de usuario completo
 
