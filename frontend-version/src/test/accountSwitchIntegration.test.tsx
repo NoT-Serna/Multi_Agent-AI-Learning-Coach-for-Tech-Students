@@ -106,16 +106,11 @@ function makeSubmitDiagnosticResponse(sessionId: string) {
     skill_scores: { react: 0.8, typescript: 0.7 },
     strong_skills: ['react'],
     weak_skills: ['typescript'],
-    learning_roadmap: [
-      {
-        week: 1,
-        theme: 'TypeScript Fundamentals',
-        modules: [{ id: 1, title: 'Types & Interfaces', type: 'video' as const, duration: 30, completed: false }],
-      },
-    ],
+    learning_roadmap: [],
     quiz_questions: [],
     current_week: 1,
-    study_calendar: [],
+    study_calendar: [], message: 'ok',
+    message: "ok",
   };
 }
 
