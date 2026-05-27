@@ -16,11 +16,12 @@ CoachApp es una plataforma educativa personalizada que combina un frontend web m
 ---
 
 ## Requisitos previos
+- Docker v5
 
 ### Frontend
 - **Node.js** v18 o superior
 - **npm** v9 o superior
-- Docker
+  
 
 ### Agente (backend)
 - **Python** 3.10 o superior
@@ -36,14 +37,17 @@ ollama pull llama3.2:3b
 ---
 
 ## Ejecución completa del proyecto
+```
+El proyecto tiene dos procesos que deben correr en paralelo: el **agente (backend)** y el **frontend**.
 
-El proyecto tiene dos procesos que deben correr en paralelo: el **agente (backend)** y el **frontend**. 
 En la raíz del directorio realizar **docker-compose up --build** (para versiones diferentes el comando alterno es docker compose up --build)
+
 Luego de ello se puede visualizar la app por medio de localhost:5173
 
 -Para apagar los contenedores realizar **docker-compose down**
--Para encender sin reconstruir las imagenes realizar **docker-compose up**
 
+-Para encender sin reconstruir las imagenes realizar **docker-compose up**
+```
 ## Flujo de usuario completo
 
 ```
