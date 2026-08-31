@@ -1,5 +1,16 @@
 # Created by venv; see https://docs.python.org/3/library/venv.html
 .env
+.venv
+.kiro
+.vscode
+.DS_Store
 venv/
 __pycache__/
+langfuse/
 *.pyc
+CLAUDE.md
+
+# Firebase service account credentials — NEVER commit these
+*serviceAccountKey*.json
+*service_account*.json
+devops.agent.md

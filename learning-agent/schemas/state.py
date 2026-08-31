@@ -32,7 +32,7 @@ class AgentState(TypedDict):
     current_quiz_week: Optional[int]
     current_week: Optional[int]        # 1–4
     completed_weeks: List[int]
-    current_module: Optional[str]
+    current_module: Optional[int]
     completed_modules: List[str]
 
     # Quiz
@@ -42,6 +42,10 @@ class AgentState(TypedDict):
     quiz_passed: Optional[bool]
     quiz_attempts: Dict[str, int]          # {"week_1": 1, "week_2": 2, ...}
     max_attempts: Optional[int]
+
+    # Calendario de estudio
+    roadmap_start_date: Optional[str]   # ISO 8601 (YYYY-MM-DD), fecha de inicio del roadmap
+    study_calendar: List[Dict]          # Lista de CalendarEventModel serializados
 
     # Orquestador
     current_step: Optional[str]

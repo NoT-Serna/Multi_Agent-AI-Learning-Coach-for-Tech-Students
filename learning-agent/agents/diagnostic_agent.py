@@ -1,24 +1,13 @@
-import os
-from dotenv import load_dotenv
-
 import json
 from typing import Dict, List
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langfuse.langchain import CallbackHandler
 
+from agents.llm_factory import build_llm
 from schemas.state import AgentState
 
-load_dotenv()
-
 # ─── LLM ──────────────────────────────────────────────────────────────────────
-langfuse_handler = CallbackHandler()
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    temperature=0.3,
-    callbacks=[langfuse_handler]
-)
+llm, llm_json = build_llm()
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -87,7 +76,7 @@ def generate_skills(state: AgentState) -> AgentState:
     background  = state.get("user_background",   "sin experiencia")
     preferences = state.get("user_preferences",  "programación en general")
 
-    response = llm.invoke([
+    response = llm_json.invoke([
         SystemMessage(content="""Eres un experto en educación tecnológica.
 Identifica las habilidades esenciales que un estudiante debe dominar,
 organizadas en exactamente estas 4 categorías:
@@ -160,7 +149,7 @@ def generate_exam(state: AgentState) -> AgentState:
 
     total = QUESTIONS_PER_CATEGORY * len(CATEGORIES)
 
-    response = llm.invoke([
+    response = llm_json.invoke([
         SystemMessage(content="""Eres un experto en evaluación educativa para tecnología.
 Crea un examen de diagnóstico de opción múltiple.
 
@@ -250,7 +239,7 @@ def evaluate_answers(state: AgentState) -> AgentState:
         for i, q in enumerate(questions)
     ]
 
-    response = llm.invoke([
+    response = llm_json.invoke([
         SystemMessage(content="""Eres un evaluador educativo.
 Se te dan las preguntas con sus respuestas correctas y las respuestas del estudiante.
 

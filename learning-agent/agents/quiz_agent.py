@@ -1,0 +1,264 @@
+import json
+import logging
+from typing import Dict, List
+
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+
+from agents.llm_factory import build_llm
+from schemas.state import AgentState
+
+logger = logging.getLogger(__name__)
+
+# ─── LLM ──────────────────────────────────────────────────────────────────────
+llm, llm_json = build_llm()
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+
+PASSING_SCORE  = 70.0   # minimum % to advance to next week
+QUESTIONS_PER_QUIZ = 5
+
+
+# ─── Helper ───────────────────────────────────────────────────────────────────
+
+def _parse_json(text: str) -> dict:
+    """Safely extract and parse a JSON block from LLM output."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end   = text.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError(f"No JSON found in LLM response:\n{text}")
+        return json.loads(text[start:end])
+
+
+# ─── Node 1: generate_quiz ────────────────────────────────────────────────────
+
+def generate_quiz(state: AgentState) -> AgentState:
+    """
+    Generates 5 MCQ questions based on the current week's modules
+    and the student's weak skills from the diagnostic.
+    Sets next_step to 'await_quiz_answers' so the principal pauses
+    for the student to submit answers.
+    """
+    # Student info
+    name        = state.get("student_name",     "Estudiante")
+    background  = state.get("user_background",  "sin experiencia previa")
+    preferences = state.get("user_preferences", "programación en general")
+
+    # Diagnostic results
+    weak_skills  = state.get("weak_skills",  [])
+    skill_scores = state.get("skill_scores", {})
+
+    # Current week modules from roadmap
+    current_week     = state.get("current_week", 1)
+    learning_roadmap = state.get("learning_roadmap", [])
+
+    week_data = next(
+        (w for w in learning_roadmap if w.get("week") == current_week), {}
+    )
+    modules   = week_data.get("modules", [])
+    week_focus = week_data.get("focus", "")
+
+    response = llm_json.invoke([
+        SystemMessage(content=f"""Eres un mentor experto en educación tecnológica.
+Crea un quiz de {QUESTIONS_PER_QUIZ} preguntas de opción múltiple para evaluar
+al estudiante al final de la semana {current_week} de su plan de estudio.
+
+Reglas:
+- Cada pregunta tiene exactamente 4 opciones: A, B, C, D
+- Solo una opción es correcta
+- Las preguntas deben cubrir los módulos de la semana actual
+- Prioriza las habilidades débiles del estudiante
+- Las preguntas deben ser claras y sin ambigüedades
+- El campo "justification" es OBLIGATORIO en cada pregunta: explica en 1-2 oraciones por qué la opción correcta es la correcta y por qué las demás no lo son
+
+Responde ÚNICAMENTE con JSON válido, sin texto adicional:
+{{
+  "questions": [
+    {{
+      "id": "week{current_week}_q1",
+      "week": {current_week},
+      "question": "texto de la pregunta",
+      "module_reference": "nombre del módulo que evalúa",
+      "options": {{
+        "A": "opción A",
+        "B": "opción B",
+        "C": "opción C",
+        "D": "opción D"
+      }},
+      "correct_answer": "A",
+      "skill_tested": "habilidad que evalúa",
+      "justification": "La opción X es correcta porque... Las demás opciones son incorrectas porque..."
+    }}
+  ]
+}}"""),
+
+        HumanMessage(content=f"""Perfil del estudiante:
+- Nombre: {name}
+- Experiencia: {background}
+- Intereses: {preferences}
+
+Semana {current_week} — Enfoque: {week_focus}
+Módulos de la semana:
+{json.dumps(modules, ensure_ascii=False, indent=2)}
+
+Habilidades débiles del diagnóstico:
+{', '.join(weak_skills) if weak_skills else 'ninguna identificada'}
+
+Puntajes del diagnóstico:
+{json.dumps(skill_scores, ensure_ascii=False)}
+
+Genera el quiz de {QUESTIONS_PER_QUIZ} preguntas para la semana {current_week}."""),
+    ])
+
+    quiz_data = _parse_json(response.content)
+    questions: List[Dict] = quiz_data.get("questions", [])
+
+    msg = AIMessage(content=(
+        f"Quiz de la semana {current_week} listo — {len(questions)} preguntas.\n\n"
+        f"Enfoque: {week_focus}\n\n"
+        "Responde cada pregunta con la letra de tu opción (A, B, C o D). "
+        f"Necesitas un {PASSING_SCORE:.0f}% o más para avanzar a la siguiente semana."
+    ))
+
+    return {
+        **state,
+        "messages":          [msg],
+        "quiz_questions":    questions,
+        "quiz_answers":      [],
+        "quiz_passed":       None,
+        "current_quiz_week": current_week,
+        "current_step":      "generate_quiz",
+        "next_step":         "await_quiz_answers",
+    }
+
+
+# ─── Node 2: evaluate_quiz_answers ────────────────────────────────────────────
+
+def evaluate_quiz_answers(state: AgentState) -> AgentState:
+    """
+    Scores the student's quiz answers, determines pass/fail,
+    updates quiz_attempts, and signals the principal to either
+    advance to the next week or trigger adjust_roadmap.
+    """
+    name              = state.get("student_name",      "Estudiante")
+    current_quiz_week = state.get("current_quiz_week", 1)
+    quiz_questions    = state.get("quiz_questions",    [])
+    quiz_answers      = state.get("quiz_answers",      [])
+    quiz_scores       = state.get("quiz_scores",       {})
+    quiz_attempts     = state.get("quiz_attempts",     {})
+    max_attempts      = state.get("max_attempts",      3)
+    completed_weeks   = state.get("completed_weeks",   [])
+
+    logger.info(
+        "[evaluate_quiz_answers] questions=%d answers=%d values=%s",
+        len(quiz_questions), len(quiz_answers), quiz_answers,
+    )
+
+    if not quiz_questions or not quiz_answers:
+        logger.warning(
+            "[evaluate_quiz_answers] Missing data — questions=%d answers=%d",
+            len(quiz_questions), len(quiz_answers),
+        )
+        return {
+            **state,
+            "error_message": "No hay preguntas o respuestas para evaluar.",
+            "current_step":  "evaluate_quiz_answers",
+            "next_step":     "error",
+        }
+
+    # Deterministic scoring — compare answers directly, no LLM needed.
+    # Normalize both sides to guard against LLM formatting quirks (lowercase, periods, spaces).
+    def _norm(s: str) -> str:
+        # Extract just the first uppercase character so "A.", "A) text", "a" all equal "A"
+        s = s.strip().upper()
+        return s[0] if s else ""
+
+    total         = len(quiz_questions)
+    correct_count = sum(
+        1 for i, q in enumerate(quiz_questions)
+        if i < len(quiz_answers)
+        and _norm(quiz_answers[i]) == _norm(q.get("correct_answer", ""))
+    )
+    score: float  = round((correct_count / total) * 100, 1)
+    passed: bool  = score >= PASSING_SCORE
+
+    # Derive weak areas from incorrectly answered questions
+    weak_areas = list({
+        q.get("skill_tested", "")
+        for i, q in enumerate(quiz_questions)
+        if not (
+            i < len(quiz_answers)
+            and _norm(quiz_answers[i]) == _norm(q.get("correct_answer", ""))
+        )
+        and q.get("skill_tested")
+    })
+
+    # Update quiz scores and attempts
+    week_key              = f"week_{current_quiz_week}"
+    updated_scores        = {**quiz_scores,   week_key: score}
+    current_attempts      = quiz_attempts.get(week_key, 0) + 1
+    updated_attempts      = {**quiz_attempts, week_key: current_attempts}
+
+    # Determine next step
+    if passed:
+        # Advance to next week
+        updated_completed = completed_weeks + [current_quiz_week]
+        next_week         = current_quiz_week + 1
+        next_step         = "next_week" if next_week <= 4 else "completed"
+
+        msg = AIMessage(content=(
+            f"🎉 **¡Felicitaciones {name}!**\n\n"
+            f"**Puntaje: {score:.0f}/100** ({correct_count}/{total} correctas) — ✅ Aprobado\n\n"
+            + (f"Avanzas a la semana {next_week}. ¡Sigue así!"
+               if next_week <= 4
+               else "¡Completaste el plan de estudio! 🏆")
+        ))
+
+        return {
+            **state,
+            "messages":        [msg],
+            "quiz_scores":     updated_scores,
+            "quiz_attempts":   updated_attempts,
+            "quiz_passed":     True,
+            "completed_weeks": updated_completed,
+            "current_week":    next_week if next_week <= 4 else current_quiz_week,
+            "weak_skills":     weak_areas if weak_areas else state.get("weak_skills", []),
+            "current_step":    "evaluate_quiz_answers",
+            "next_step":       next_step,
+        }
+
+    else:
+        # Failed — check if max attempts reached
+        if current_attempts >= max_attempts:
+            next_step = "adjust_roadmap"
+            feedback  = (
+                f"Has alcanzado el máximo de intentos ({max_attempts}) para la semana {current_quiz_week}. "
+                "Voy a ajustar tu plan de estudio para reforzar las áreas donde necesitas más práctica."
+            )
+        else:
+            next_step = "retry_quiz"
+            remaining = max_attempts - current_attempts
+            feedback  = (
+                f"Te quedan {remaining} intento(s) para esta semana. "
+                "Revisa los módulos e inténtalo de nuevo."
+            )
+
+        msg = AIMessage(content=(
+            f"**Resultado semana {current_quiz_week}**\n\n"
+            f"**Puntaje: {score:.0f}/100** ({correct_count}/{total} correctas) — ❌ No aprobado (mínimo {PASSING_SCORE:.0f})\n\n"
+            f"Áreas a reforzar: {', '.join(weak_areas) if weak_areas else 'revisar todos los módulos'}\n\n"
+            f"{feedback}"
+        ))
+
+        return {
+            **state,
+            "messages":      [msg],
+            "quiz_scores":   updated_scores,
+            "quiz_attempts": updated_attempts,
+            "quiz_passed":   False,
+            "weak_skills":   weak_areas if weak_areas else state.get("weak_skills", []),
+            "current_step":  "evaluate_quiz_answers",
+            "next_step":     next_step,
+        }
